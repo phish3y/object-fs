@@ -8,7 +8,7 @@
 #include <unistd.h>
 
 
-#define maxdirs 4
+#define maxdirs 2
 #define maxfiles 4
 
 #define maxdirname 8
@@ -24,13 +24,24 @@ int fileidx = -1;
 char contentlist[maxfiles][maxcontentsize];
 int contentidx = -1;
 
-void adddir(const char *dirname) {
+void adddir(const char *path) {
+    path++;
+
     diridx++;
-    strcpy(dirlist[diridx], dirname);
+    strcpy(dirlist[diridx], path);
+}
+
+void removedir(int idx) {
+    for(int i = idx; i < diridx - 1; i++) {
+        strcpy(dirlist[i], dirlist[i + 1]);
+    }
+
+    diridx--;
 }
 
 int isdir(const char *path) {
     path++;
+
     for(int i = 0; i <= diridx; i++) {
         if(strcmp(path, dirlist[i]) == 0) {
             return 1;
@@ -40,16 +51,45 @@ int isdir(const char *path) {
     return 0;
 }
 
-void addfile(const char *filename) {
+int getdiridx(const char *path) {
+    path++;
+
+    for(int i = 0; i <= diridx; i++) {
+        if(strcmp(path, dirlist[i]) == 0) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+void addfile(const char *path) {
+    path++;
+
     fileidx++;
-    strcpy(filelist[fileidx], filename);
+    strcpy(filelist[fileidx], path);
 
     contentidx++;
     strcpy(contentlist[contentidx], "");
 }
 
+void removefile(int idx) {
+    for(int i = idx; i < fileidx - 1; i++) {
+        strcpy(filelist[i], filelist[i + 1]);
+    }
+
+    fileidx--;
+
+    for(int i = idx; i < contentidx - 1; i++) {
+        strcpy(contentlist[i], contentlist[i + 1]);
+    }
+
+    contentidx--;
+}
+
 int isfile(const char *path) {
     path++;
+
     for(int i = 0; i <= fileidx; i++) {
         if(strcmp(path, filelist[i]) == 0) {
             return 1;
@@ -61,6 +101,7 @@ int isfile(const char *path) {
 
 int getfileidx(const char *path) {
     path++;
+
     for(int i = 0; i <= fileidx; i++) {
         if(strcmp(path, filelist[i]) == 0) {
             return i;
@@ -154,8 +195,25 @@ static int e_read(
 static int e_mkdir(const char *path, mode_t mode) {
     fprintf(stdout, "`e_mkdir` called for: %s\n", path);
 
-    path++;
+    if(diridx + 1 >= maxdirs) {
+        fprintf(stderr, "max directories reached\n");
+        return -EINVAL;
+    }
+
     adddir(path);
+
+    return 0;
+}
+
+static int e_rmdir(const char *path) {
+    fprintf(stdout, "`e_rmdir` called for: %s\n", path);
+
+    int idx = getdiridx(path);
+    if(idx == -1) {
+        return -EINVAL;
+    }
+
+    removedir(idx);
 
     return 0;
 }
@@ -163,12 +221,30 @@ static int e_mkdir(const char *path, mode_t mode) {
 static int e_mknod(const char *path, mode_t mode, dev_t rdev) {
     fprintf(stdout, "`e_mknod` called for: %s\n", path);
 
+    if(fileidx + 1 >= maxfiles) {
+        fprintf(stderr, "max files reached\n");
+        return -EINVAL;        
+    }
+
     if(strlen(path) - 1 > maxfilename) {
+        fprintf(stderr, "file name %s exceeds limit\n", path);
         return -EINVAL;
     }
 
-    path++;
     addfile(path);
+
+    return 0;
+}
+
+static int e_unlink(const char *path) {
+    fprintf(stdout, "`e_unlink` called for: %s\n", path);
+
+    int idx = getfileidx(path);
+    if(idx == -1) {
+        return -EINVAL;
+    }
+
+    removefile(idx);
 
     return 0;
 }
@@ -182,11 +258,8 @@ static int e_write(
 ) {
     fprintf(stdout, "`e_write` called for: %s\n", path);
 
-    if(strlen(path) - 1 > maxfilename) {
-        return -EINVAL;
-    }
-
-    if(size + offset > maxcontentsize) {
+    if(size > maxcontentsize) {
+        fprintf(stderr, "file size limit exceeded\n");
         return -ENOMEM;
     }
 
@@ -200,7 +273,9 @@ static const struct fuse_operations ops = {
     .readdir = e_readdir,
     .read = e_read,
     .mkdir = e_mkdir,
+    .rmdir = e_rmdir,
     .mknod = e_mknod,
+    .unlink = e_unlink,
     .write = e_write
 };
 
