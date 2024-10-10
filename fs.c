@@ -8,7 +8,7 @@
 #include <unistd.h>
 
 
-#define maxdirs 2
+#define maxdirs 4
 #define maxfiles 4
 
 #define maxdirname 8
@@ -132,11 +132,9 @@ static int e_getattr(
     stbuf->st_atime = time(NULL);
     stbuf->st_mtime = time(NULL);
     if(strcmp(path, "/") == 0 || isdir(path)) {
-        fprintf(stdout, "is dir\n");
         stbuf->st_mode = __S_IFDIR | 0755;
         stbuf->st_nlink = 2;
     } else if(isfile(path)) {
-        fprintf(stdout, "is file\n");
         stbuf->st_mode = __S_IFREG | 0644;
         stbuf->st_nlink = 1;
         stbuf->st_size = 1024;
