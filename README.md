@@ -1,3 +1,3 @@
 # vin-fs
 
-WIP basic filesystem
+FUSE filesystem abstraction over AWS S3
