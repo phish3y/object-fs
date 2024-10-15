@@ -269,7 +269,6 @@ int main() {
 
     // create the signer
     char kdate[32], kregion[32], kservice[32], signer[32];
-    // char *secret = "AWS4943GoXYVDw8U3yhu9IibyuTEISdlOWoLJ7mjG+sA";
     char secret[256];
     res = snprintf(
         secret,
