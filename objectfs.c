@@ -1,4 +1,7 @@
+#define FUSE_USE_VERSION 31
+
 #include <errno.h>
+#include <fuse.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,13 +16,14 @@
 #include <sys/socket.h>
 
 #define AWS_CREDS_FILE ".aws/credentials"
+#define AWS_CONFIG_FILE ".aws/config"
+#define KEEP_FILE ".keep"
 
-#define debug
 
-#ifdef debug
-    #define DEBUG(fmt, ...) fprintf(stderr, "DEBUG: %s:%d: ", fmt, __FILE__, __LINE__, ##__VA_ARGS__)
+#ifdef DEBUG
+    #define debug(fmt, ...) fprintf(stderr, "DEBUG: %s:%d: " fmt, __FILE__, __LINE__, ##__VA_ARGS__)
 #else
-    #define DEBUG(fmt, ...)
+    #define debug(fmt, ...)
 #endif
 
 struct awscreds {
@@ -28,6 +32,14 @@ struct awscreds {
     char *region;
 };
 
+/**
+ * getawscreds
+ * 
+ * @param creds: A pointer to the struct of which `key` and `secret` will be allocated to
+ * @return: 0 on success, -1 on failure
+ * 
+ * Note: The caller must free the memory allocated for `key` and `secret`
+ */
 int getawscreds(struct awscreds *creds) {
     const char *home = getenv("HOME");
 
@@ -44,33 +56,32 @@ int getawscreds(struct awscreds *creds) {
         return -1;
     }
 
-    DEBUG("%s\n", credspath);
+    debug("looking for aws credentials file at: %s\n", credspath);
 
-    FILE *f = fopen(credspath, "rb");
-    if (f == NULL) {
+    FILE *credsfile = fopen(credspath, "rb");
+    if (credsfile == NULL) {
         fprintf(stdout, "failed to read aws credentials file\n");
         return -1; 
     }
 
-    fseek(f, 0, SEEK_END);
-    long filesize = ftell(f);
-    fseek(f, 0, SEEK_SET);
+    fseek(credsfile, 0, SEEK_END);
+    long filesize = ftell(credsfile);
+    fseek(credsfile, 0, SEEK_SET);
 
     char *buf = (char *) malloc(filesize + 1);
     if (buf == NULL) {
         fprintf(stdout, "failed to allocate memory to read aws credentials file\n");
-        fclose(f);
+        fclose(credsfile);
         return -1; 
     }
 
-    size_t bytesRead = fread(buf, 1, filesize, f);
+    size_t bytesRead = fread(buf, 1, filesize, credsfile);
     buf[bytesRead] = '\0';
     
-    fclose(f);
+    fclose(credsfile);
 
     char key[256];
     char secret[256];
-    // TODO get region or default
 
     char *line = strtok((char *) buf, "\n");
     while(line != NULL) {
@@ -86,6 +97,72 @@ int getawscreds(struct awscreds *creds) {
     // TODO check key/secret were found
     creds->key = strdup(key);
     creds->secret = strdup(secret);
+
+    free(buf);
+
+    return 0;
+}
+
+/**
+ * getawsconfig
+ * 
+ * @param creds: A pointer to the struct of which `region` will be allocated to
+ * @return: 0 on success, -1 on failure
+ * 
+ * Note: The caller must free the memory allocated for `region`
+ */
+int getawsconfig(struct awscreds *creds) {
+    const char *home = getenv("HOME");
+
+    char configpath[1024];
+    int res = snprintf(
+        configpath,
+        sizeof(configpath),
+        "%s/%s",
+        home,
+        AWS_CONFIG_FILE
+    );
+    if(res < 0) {
+        fprintf(stdout, "failed to build aws config filepath\n");
+        return -1;
+    }
+
+    FILE *configfile = fopen(configpath, "rb");
+    if (configfile == NULL) {
+        fprintf(stdout, "failed to read aws config file\n");
+        return -1; 
+    }
+
+    fseek(configfile, 0, SEEK_END);
+    long filesize = ftell(configfile);
+    fseek(configfile, 0, SEEK_SET);
+
+    char *buf = (char *) malloc(filesize + 1);
+    if (buf == NULL) {
+        fprintf(stdout, "failed to allocate memory to read aws config file\n");
+        fclose(configfile);
+        return -1; 
+    }
+
+    size_t bytesRead = fread(buf, 1, filesize, configfile);
+    buf[bytesRead] = '\0';
+    
+    fclose(configfile);
+
+    char region[256];
+
+    char *line = strtok((char *) buf, "\n");
+    while(line != NULL) {
+        if(strstr(line, "region") != NULL) {
+            sscanf(line, "region = %s", region);
+        } 
+
+        line = strtok(NULL, "\n");
+    }
+    
+    creds->region = strdup(region);
+
+    free(buf);
 
     return 0;
 }
@@ -167,15 +244,126 @@ int awsdate(char *timestamp, size_t bufsize) {
     return 0;
 }
 
+static int object_getattr(
+    const char *path, 
+    struct stat *stbuf, 
+    struct fuse_file_info *fi
+) {
+    fprintf(stdout, "`object_getattr` called for: %s\n", path);
 
-int main() {
+    // stbuf->st_uid = getuid();
+    // stbuf->st_gid = getgid();
+    // stbuf->st_atime = time(NULL);
+    // stbuf->st_mtime = time(NULL);
+    // if(strcmp(path, "/") == 0 || isdir(path)) {
+    //     stbuf->st_mode = __S_IFDIR | 0755;
+    //     stbuf->st_nlink = 2;
+    // } else if(isfile(path)) {
+    //     stbuf->st_mode = __S_IFREG | 0644;
+    //     stbuf->st_nlink = 1;
+    //     stbuf->st_size = 1024;
+    // } else {
+    //     return -ENOENT;
+    // }
+
+    return 0;
+}
+
+static int object_readdir(
+    const char *path, 
+    void *buf, 
+    fuse_fill_dir_t filler, 
+    off_t offset, 
+    struct fuse_file_info *fi, 
+    enum fuse_readdir_flags flags
+) {
+    fprintf(stdout, "`object_readdir` called for: %s\n", path);
+
+
+    return 0;
+}
+
+static int object_read(
+    const char *path, 
+    char *buf, 
+    size_t size, 
+    off_t offset, 
+    struct fuse_file_info *fi
+) {
+    fprintf(stdout, "`object_read` called for: %s\n", path);
+
+    // memcpy(buf, content + offset, size);
+
+    return 0;
+}
+
+static int object_mkdir(
+    const char *path, 
+    mode_t mode
+) {
+    fprintf(stdout, "`object_mkdir` called for: %s\n", path);
+
+    return 0;
+}
+
+static int object_rmdir(const char *path) {
+    fprintf(stdout, "`object_rmdir` called for: %s\n", path);
+
+    return 0;
+}
+
+static int object_mknod(
+    const char *path, 
+    mode_t mode, 
+    dev_t rdev
+) {
+    fprintf(stdout, "`object_mknod` called for: %s\n", path);
+
+    return 0;
+}
+
+static int object_unlink(const char *path) {
+    fprintf(stdout, "`object_unlink` called for: %s\n", path);
+
+    return 0;
+}
+
+static int object_write(
+    const char *path, 
+    const char *buf, 
+    size_t size, 
+    off_t offset, 
+    struct fuse_file_info *fi
+) {
+    fprintf(stdout, "`object_write` called for: %s\n", path);
+
+    return size;
+}
+
+static const struct fuse_operations ops = {
+    .getattr = object_getattr,
+    .readdir = object_readdir,
+    .read = object_read,
+    .mkdir = object_mkdir,
+    .rmdir = object_rmdir,
+    .mknod = object_mknod,
+    .unlink = object_unlink,
+    .write = object_write
+};
+
+int main(int argc, char *argv[]) {
     struct awscreds creds;
     if(getawscreds(&creds) < 0) {
         fprintf(stderr, "failed to get aws creds\n");
         return -EIO;
     }  
 
-    fprintf(stdout, "%s, %s\n", creds.key, creds.secret);
+    if(getawsconfig(&creds) < 0) {
+        fprintf(stderr, "failed to get aws config\n");
+        return -EIO;
+    }
+
+    debug("\nAWS key: %s\nAWS secret: %s\nAWS region: %s\n", creds.key, creds.secret, creds.region);
 
     int sock;
     if((sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0) {
@@ -242,7 +430,7 @@ int main() {
         return -EIO;
     }
 
-    fprintf(stdout, "%s\n\n\n", canonical);
+    debug("aws canonical req:\n%s\n", canonical);
 
     // hash/hex the canonical req
     unsigned char canonicalhash[SHA256_DIGEST_LENGTH];
@@ -265,11 +453,10 @@ int main() {
         canonicalhex
     );
 
-    fprintf(stdout, "%s\n\n\n", tosign);
+    debug("to sign:\n%s\n", tosign);
 
     // create the signer
     char kdate[32], kregion[32], kservice[32], signer[32];
-    // char *secret = "AWS4943GoXYVDw8U3yhu9IibyuTEISdlOWoLJ7mjG+sA";
     char secret[256];
     res = snprintf(
         secret,
@@ -306,7 +493,7 @@ int main() {
         signature
     );
     
-    fprintf(stdout, "%s\n\n\n", req);
+    debug("http req:\n%s\n", req);
 
     // send the http req
     int sent = 0;
@@ -335,6 +522,8 @@ int main() {
     close(sock);
     free(creds.key);
     free(creds.secret);
+    free(creds.region);
 
     return 0;
+    // return fuse_main(argc, argv, &ops, NULL);
 }
