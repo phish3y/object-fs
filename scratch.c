@@ -14,12 +14,12 @@
 
 #define AWS_CREDS_FILE ".aws/credentials"
 
-#define debug
+#define DEBUG
 
-#ifdef debug
-    #define DEBUG(fmt, ...) fprintf(stderr, "DEBUG: %s:%d: ", fmt, __FILE__, __LINE__, ##__VA_ARGS__)
+#ifdef DEBUG
+    #define debug(fmt, ...) fprintf(stderr, "DEBUG: %s:%d: " fmt, __FILE__, __LINE__, ##__VA_ARGS__)
 #else
-    #define DEBUG(fmt, ...)
+    #define debug(fmt, ...)
 #endif
 
 struct awscreds {
@@ -44,7 +44,7 @@ int getawscreds(struct awscreds *creds) {
         return -1;
     }
 
-    DEBUG("%s\n", credspath);
+    debug("looking for aws credentials file at: %s\n", credspath);
 
     FILE *f = fopen(credspath, "rb");
     if (f == NULL) {
@@ -242,7 +242,7 @@ int main() {
         return -EIO;
     }
 
-    fprintf(stdout, "%s\n\n\n", canonical);
+    debug("aws canonical req:\n%s\n", canonical);
 
     // hash/hex the canonical req
     unsigned char canonicalhash[SHA256_DIGEST_LENGTH];
@@ -265,7 +265,7 @@ int main() {
         canonicalhex
     );
 
-    fprintf(stdout, "%s\n\n\n", tosign);
+    debug("to sign:\n%s\n", tosign);
 
     // create the signer
     char kdate[32], kregion[32], kservice[32], signer[32];
@@ -306,7 +306,7 @@ int main() {
         signature
     );
     
-    fprintf(stdout, "%s\n\n\n", req);
+    debug("http req:\n%s\n", req);
 
     // send the http req
     int sent = 0;
