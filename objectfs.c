@@ -1,7 +1,7 @@
 #define FUSE_USE_VERSION 31
 
 #include <errno.h>
-#include <fuse.h>
+#include <netdb.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,7 +9,7 @@
 #include <time.h>
 
 #include <arpa/inet.h>
-#include <netdb.h>
+#include <fuse.h>
 #include <netinet/in.h>
 #include <openssl/hmac.h>
 #include <openssl/sha.h>
@@ -172,31 +172,16 @@ int getawsconfig(struct awscreds *creds) {
     return 0;
 }
 
-void tohex(unsigned char *input, size_t len, char *output) {
+void tohex(const unsigned char *input, const size_t len, char *output) {
     for (int i = 0; i < len; i++) {
         sprintf(output + (i * 2), "%02x", input[i]);
     }
-    output[len * 2] = '\0';
 }
 
-void hmac_sha256(const char *key, const char *data, unsigned char *output) {
-    #pragma GCC diagnostic push
-    #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-
-    unsigned int len = 32;
-    HMAC_CTX *ctx = HMAC_CTX_new();
-    HMAC_Init_ex(ctx, key, strlen(key), EVP_sha256(), NULL);
-    HMAC_Update(ctx, (unsigned char*) data, strlen(data));
-    HMAC_Final(ctx, output, &len);
-    HMAC_CTX_free(ctx);
-
-    #pragma GCC diagnostic pop
-}
-
-int awstime(char *timestamp, size_t bufsize) {
+int awstime(char *timestamp, size_t len) {
     size_t tssize = 20;
 
-    if(bufsize < tssize) {
+    if(len < tssize) {
         error("buffer size too small for timestamp. must be at least: %zu\n", tssize);
         return -1;
     }
@@ -221,10 +206,10 @@ int awstime(char *timestamp, size_t bufsize) {
     return 0;
 }
 
-int awsdate(char *timestamp, size_t bufsize) {
+int awsdate(char *timestamp, size_t len) {
     size_t tssize = 9;
 
-    if(bufsize < tssize) {
+    if(len < tssize) {
         error("buffer size too small for date. must be at least: %zu\n", tssize);
         return -1;
     }
@@ -283,12 +268,19 @@ int bucketconnect() {
     return sock;
 }
 
-int getawssignature(char *signature, size_t bufsize, struct awscreds *creds, char *date, char *timestamp) {
+int getawssignature(char *signature, size_t len, struct awscreds *creds, char *date, char *timestamp) {
     size_t signaturesize = SHA256_DIGEST_LENGTH * 2 + 1;
-    if(bufsize < signaturesize) {
+    if(len < signaturesize) {
         error("buffer size too small for signature. must be at least: %zu\n", signaturesize);
         return -1;
     }
+
+    char *payload = "";
+    unsigned char payloadhash[SHA256_DIGEST_LENGTH];
+    SHA256((unsigned char*) payload, strlen(payload), payloadhash);
+
+    char payloadhex[SHA256_DIGEST_LENGTH * 2 + 1];
+    tohex(payloadhash, SHA256_DIGEST_LENGTH, payloadhex);
 
     // create aws canonical request
     char canonical[1024];
@@ -299,14 +291,16 @@ int getawssignature(char *signature, size_t bufsize, struct awscreds *creds, cha
         "/\n"
         "encoding-type=url&list-type=2&prefix=\n"
         "host:%s.s3.%s.amazonaws.com\n"
-        "x-amz-content-sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n"
+        "x-amz-content-sha256:%s\n"
         "x-amz-date:%s\n"
         "\n"
         "host;x-amz-content-sha256;x-amz-date\n"
-        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "%s",
         BUCKET,
         creds->region,
-        timestamp
+        payloadhex,
+        timestamp,
+        payloadhex
     );
     if(res < 0) {
         error("failed to build aws canonical request\n");
@@ -340,7 +334,7 @@ int getawssignature(char *signature, size_t bufsize, struct awscreds *creds, cha
     debug("to sign:\n%s\n", tosign);
 
     // create the signer
-    char kdate[32], kregion[32], kservice[32], signer[32];
+    unsigned char kdate[32], kregion[32], kservice[32], signer[32];
     char secret[256];
     res = snprintf(
         secret,
@@ -353,14 +347,37 @@ int getawssignature(char *signature, size_t bufsize, struct awscreds *creds, cha
         return -1;
     }
 
-    hmac_sha256(secret, date, (unsigned char*) kdate);
-    hmac_sha256(kdate, creds->region, (unsigned char*) kregion);
-    hmac_sha256(kregion, "s3", (unsigned char*) kservice);
-    hmac_sha256(kservice, "aws4_request", (unsigned char*) signer);
+    if (HMAC(EVP_sha256(), secret, strlen(secret), (unsigned char*) date, strlen(date),
+            (unsigned char*) kdate, NULL) == NULL) {
+        error("failed to get hmac sha for secret + date\n");
+        return -1;
+    }
 
-    // hash/hex the string to sing using the signer
+    if (HMAC(EVP_sha256(), kdate, SHA256_DIGEST_LENGTH, (unsigned char*) creds->region,
+            strlen(creds->region), (unsigned char*) kregion, NULL) == NULL) {
+        error("failed to get hmac sha for date + region\n");
+        return -1;
+    }
+
+    if (HMAC(EVP_sha256(), kregion, SHA256_DIGEST_LENGTH, (unsigned char*) "s3", 
+            strlen("s3"), (unsigned char*) kservice, NULL) == NULL) {
+        error("failed to get hmac sha for region + service\n");
+        return -1;
+    }
+
+    if (HMAC(EVP_sha256(), kservice, SHA256_DIGEST_LENGTH, (unsigned char*) "aws4_request", 
+            strlen("aws4_request"), (unsigned char*) signer, NULL) == NULL) {
+        error("failed to get hmac sha for service + request type\n");
+        return -1;
+    }
+
+    // hash/hex the string to sign using the signer
     unsigned char signedhash[SHA256_DIGEST_LENGTH];
-    hmac_sha256(signer, tosign, signedhash);
+    if (HMAC(EVP_sha256(), signer, SHA256_DIGEST_LENGTH, (unsigned char*) tosign, 
+            strlen(tosign), (unsigned char*) signedhash, NULL) == NULL) {
+        error("failed to get hmac sha for service + request type\n");
+        return -1;
+    }
 
     tohex(signedhash, SHA256_DIGEST_LENGTH, signature);
 
@@ -401,7 +418,6 @@ static int object_readdir(
     enum fuse_readdir_flags flags
 ) {
     debug("`object_readdir` called for: %s\n", path);
-
 
     return 0;
 }
@@ -524,7 +540,7 @@ int main(int argc, char *argv[]) {
         "Host: %s.s3.%s.amazonaws.com\r\n"
         "x-amz-date: %s\r\n"
         "x-amz-content-sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\r\n"
-        "Authorization: AWS4-HMAC-SHA256 Credential=%s/%s/%s/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=%s\r\n\r\n",
+        "Authorization: AWS4-HMAC-SHA256 Credential=%s/%s/%s/s3/aws4_request,SignedHeaders=host;x-amz-content-sha256;x-amz-date,Signature=%s\r\n\r\n",
         BUCKET,
         creds.region,
         timestamp,
@@ -539,6 +555,7 @@ int main(int argc, char *argv[]) {
     // send the http req
     int sent = 0;
     while(sent < strlen(req)) {
+        info("sending...\n");
         int res = send(sock, req + sent, strlen(req) - sent, 0);
         if(res == -1) {
             error("failed to send request\n");
@@ -553,6 +570,7 @@ int main(int argc, char *argv[]) {
 	char BUF[BUFSIZ];
 	size_t recived_len = 0;
 	while((recived_len = recv(sock, BUF, BUFSIZ-1, 0)) > 0) {
+        info("receiving...\n");
         BUF[recived_len] = '\0';
 		response = (char*) realloc(response, strlen(response) + strlen(BUF) + 1);
 		sprintf(response, "%s%s", response, BUF);
