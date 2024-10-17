@@ -9,6 +9,8 @@
 #include <time.h>
 
 #include <arpa/inet.h>
+#include <awsv4.h>
+#include <aws.h>
 #include <fuse.h>
 #include <netinet/in.h>
 #include <openssl/hmac.h>
@@ -30,209 +32,6 @@
 #else
     #define debug(fmt, ...)
 #endif
-
-struct awscreds {
-    char *key;
-    char *secret;
-    char *region;
-};
-
-/**
- * getawscreds
- * 
- * @param creds: A pointer to the struct of which `key` and `secret` will be allocated to
- * @return: 0 on success, -1 on failure
- * 
- * Note: The caller must free the memory allocated for `key` and `secret`
- */
-int getawscreds(struct awscreds *creds) {
-    const char *home = getenv("HOME");
-
-    char credspath[1024];
-    int res = snprintf(
-        credspath,
-        sizeof(credspath),
-        "%s/%s",
-        home,
-        AWS_CREDS_FILE
-    );
-    if(res < 0) {
-        error("failed to build aws credentials filepath\n");
-        return -1;
-    }
-
-    debug("looking for aws credentials file at: %s\n", credspath);
-
-    FILE *credsfile = fopen(credspath, "rb");
-    if (credsfile == NULL) {
-        error("failed to read aws credentials file\n");
-        return -1; 
-    }
-
-    fseek(credsfile, 0, SEEK_END);
-    long filesize = ftell(credsfile);
-    fseek(credsfile, 0, SEEK_SET);
-
-    char *buf = (char *) malloc(filesize + 1);
-    if (buf == NULL) {
-        error("failed to allocate memory to read aws credentials file\n");
-        fclose(credsfile);
-        return -1; 
-    }
-
-    size_t bytesRead = fread(buf, 1, filesize, credsfile);
-    buf[bytesRead] = '\0';
-    
-    fclose(credsfile);
-
-    char key[256];
-    char secret[256];
-
-    char *line = strtok((char *) buf, "\n");
-    while(line != NULL) {
-        if(strstr(line, "aws_access_key_id") != NULL) {
-            sscanf(line, "aws_access_key_id = %s", key);
-        } else if(strstr(line, "aws_secret_access_key") != NULL) {
-            sscanf(line, "aws_secret_access_key = %s", secret);
-        }
-
-        line = strtok(NULL, "\n");
-    }
-
-    // TODO check key/secret were found
-    creds->key = strdup(key);
-    creds->secret = strdup(secret);
-
-    free(buf);
-
-    return 0;
-}
-
-/**
- * getawsconfig
- * 
- * @param creds: A pointer to the struct of which `region` will be allocated to
- * @return: 0 on success, -1 on failure
- * 
- * Note: The caller must free the memory allocated for `region`
- */
-int getawsconfig(struct awscreds *creds) {
-    const char *home = getenv("HOME");
-
-    char configpath[1024];
-    int res = snprintf(
-        configpath,
-        sizeof(configpath),
-        "%s/%s",
-        home,
-        AWS_CONFIG_FILE
-    );
-    if(res < 0) {
-        error("failed to build aws config filepath\n");
-        return -1;
-    }
-
-    FILE *configfile = fopen(configpath, "rb");
-    if (configfile == NULL) {
-        error("failed to read aws config file\n");
-        return -1; 
-    }
-
-    fseek(configfile, 0, SEEK_END);
-    long filesize = ftell(configfile);
-    fseek(configfile, 0, SEEK_SET);
-
-    char *buf = (char *) malloc(filesize + 1);
-    if (buf == NULL) {
-        error("failed to allocate memory to read aws config file\n");
-        fclose(configfile);
-        return -1; 
-    }
-
-    size_t bytesRead = fread(buf, 1, filesize, configfile);
-    buf[bytesRead] = '\0';
-    
-    fclose(configfile);
-
-    char region[256];
-
-    char *line = strtok((char *) buf, "\n");
-    while(line != NULL) {
-        if(strstr(line, "region") != NULL) {
-            sscanf(line, "region = %s", region);
-        } 
-
-        line = strtok(NULL, "\n");
-    }
-    
-    creds->region = strdup(region);
-
-    free(buf);
-
-    return 0;
-}
-
-void tohex(const unsigned char *input, const size_t len, char *output) {
-    for (int i = 0; i < len; i++) {
-        sprintf(output + (i * 2), "%02x", input[i]);
-    }
-}
-
-int awstime(char *timestamp, size_t len) {
-    size_t tssize = 20;
-
-    if(len < tssize) {
-        error("buffer size too small for timestamp. must be at least: %zu\n", tssize);
-        return -1;
-    }
-
-    time_t now = time(NULL);
-    if(now ==((time_t) -1)) {
-        error("failed to get current time\n");
-        return -1;
-    }
-
-    struct tm *utc = gmtime(&now);
-    if(!utc) {
-        error("failed to convert time to utc\n");
-        return -1;
-    }
-
-    if(strftime(timestamp, tssize, "%Y%m%dT%H%M%SZ", utc) == 0) {
-        error("failed to format timestamp\n");
-        return -1;
-    }
-
-    return 0;
-}
-
-int awsdate(char *timestamp, size_t len) {
-    size_t tssize = 9;
-
-    if(len < tssize) {
-        error("buffer size too small for date. must be at least: %zu\n", tssize);
-        return -1;
-    }
-
-    time_t now = time(NULL);
-    if(now ==((time_t) -1)) {
-        error("failed to get current time\n");
-        return -1;
-    }
-
-    struct tm *utc = gmtime(&now);
-    if(!utc) {
-        error("failed to convert time to utc\n");
-        return -1;
-    }
-
-    if(strftime(timestamp, tssize, "%Y%m%d", utc) == 0) {
-        error("failed to format dat\n");
-        return -1;
-    }
-
-    return 0;
-}
 
 int bucketconnect() {
     int sock;
@@ -268,118 +67,63 @@ int bucketconnect() {
     return sock;
 }
 
-int getawssignature(char *signature, size_t len, struct awscreds *creds, char *date, char *timestamp) {
-    size_t signaturesize = SHA256_DIGEST_LENGTH * 2 + 1;
-    if(len < signaturesize) {
-        error("buffer size too small for signature. must be at least: %zu\n", signaturesize);
+int httpsend(const int sock, const char *req) {
+    int sent = 0;
+    while(sent < strlen(req)) {
+        int res = send(sock, req + sent, strlen(req) - sent, 0);
+        if(res == -1) {
+            error("failed to send http request\n");
+            return -1;
+        }
+
+        sent += res;
+    }
+
+    return 0;
+}
+
+int httpreceive(const int sock, char *output, const size_t len) {
+    size_t totalrec = 0;
+    char buf[BUFSIZ];
+    ssize_t currentrec = 0;
+    while((currentrec = recv(sock, buf, BUFSIZ - 1, 0)) > 0) {
+        buf[currentrec] = '\0';
+        
+        // TODO resize output
+        // if()
+
+        memcpy(output + totalrec, buf, currentrec + 1);
+        totalrec += currentrec;
+    }
+
+    if(currentrec < 0) {
+        error("failed to receive http response");
         return -1;
     }
 
-    char *payload = "";
-    unsigned char payloadhash[SHA256_DIGEST_LENGTH];
-    SHA256((unsigned char*) payload, strlen(payload), payloadhash);
+    return 0;
+}
 
-    char payloadhex[SHA256_DIGEST_LENGTH * 2 + 1];
-    tohex(payloadhash, SHA256_DIGEST_LENGTH, payloadhex);
-
-    // create aws canonical request
-    char canonical[1024];
-    int res = snprintf(
-        canonical, 
-        sizeof(canonical),
-        "GET\n"
-        "/\n"
-        "encoding-type=url&list-type=2&prefix=\n"
-        "host:%s.s3.%s.amazonaws.com\n"
-        "x-amz-content-sha256:%s\n"
-        "x-amz-date:%s\n"
-        "\n"
-        "host;x-amz-content-sha256;x-amz-date\n"
-        "%s",
-        BUCKET,
-        creds->region,
-        payloadhex,
-        timestamp,
-        payloadhex
-    );
-    if(res < 0) {
-        error("failed to build aws canonical request\n");
+int getuntil(char *output, const size_t len, const char *input, const char *until) {
+    if(output == NULL) {
+        error("output buffer must not be null\n");
         return -1;
     }
 
-    debug("aws canonical req:\n%s\n", canonical);
+    const char *pos = strstr(input, until);
+    if (pos != NULL) {
+        size_t sublen = pos - input;
+        if (sublen >= len) {
+            error("buffer size too small for substring. must be at least: %zu\n", sublen);
+            return -1;
+        }
 
-    // hash/hex the canonical req
-    unsigned char canonicalhash[SHA256_DIGEST_LENGTH];
-    SHA256((unsigned char*) canonical, strlen(canonical), canonicalhash);
-
-    char canonicalhex[SHA256_DIGEST_LENGTH * 2 + 1];
-    tohex(canonicalhash, SHA256_DIGEST_LENGTH, canonicalhex);
-
-    // create the string that needs signed
-    char tosign[1024];
-    snprintf(
-        tosign, 
-        sizeof(tosign),
-        "AWS4-HMAC-SHA256\n"
-        "%s\n"
-        "%s/%s/s3/aws4_request\n"
-        "%s", 
-        timestamp, 
-        date,
-        creds->region,
-        canonicalhex
-    );
-
-    debug("to sign:\n%s\n", tosign);
-
-    // create the signer
-    unsigned char kdate[32], kregion[32], kservice[32], signer[32];
-    char secret[256];
-    res = snprintf(
-        secret,
-        sizeof(secret),
-        "AWS4%s",
-        creds->secret
-    );
-    if(res < 0) {
-        error("failed to build secret key\n");
-        return -1;
+        strncpy(output, input, sublen);
+        output[sublen] = '\0';
+    } else {
+        strncpy(output, input, len - 1);
+        output[len - 1] = '\0';
     }
-
-    if (HMAC(EVP_sha256(), secret, strlen(secret), (unsigned char*) date, strlen(date),
-            (unsigned char*) kdate, NULL) == NULL) {
-        error("failed to get hmac sha for secret + date\n");
-        return -1;
-    }
-
-    if (HMAC(EVP_sha256(), kdate, SHA256_DIGEST_LENGTH, (unsigned char*) creds->region,
-            strlen(creds->region), (unsigned char*) kregion, NULL) == NULL) {
-        error("failed to get hmac sha for date + region\n");
-        return -1;
-    }
-
-    if (HMAC(EVP_sha256(), kregion, SHA256_DIGEST_LENGTH, (unsigned char*) "s3", 
-            strlen("s3"), (unsigned char*) kservice, NULL) == NULL) {
-        error("failed to get hmac sha for region + service\n");
-        return -1;
-    }
-
-    if (HMAC(EVP_sha256(), kservice, SHA256_DIGEST_LENGTH, (unsigned char*) "aws4_request", 
-            strlen("aws4_request"), (unsigned char*) signer, NULL) == NULL) {
-        error("failed to get hmac sha for service + request type\n");
-        return -1;
-    }
-
-    // hash/hex the string to sign using the signer
-    unsigned char signedhash[SHA256_DIGEST_LENGTH];
-    if (HMAC(EVP_sha256(), signer, SHA256_DIGEST_LENGTH, (unsigned char*) tosign, 
-            strlen(tosign), (unsigned char*) signedhash, NULL) == NULL) {
-        error("failed to get hmac sha for service + request type\n");
-        return -1;
-    }
-
-    tohex(signedhash, SHA256_DIGEST_LENGTH, signature);
 
     return 0;
 }
@@ -494,43 +238,94 @@ int main(int argc, char *argv[]) {
     struct awscreds creds;
     if(getawscreds(&creds) < 0) {
         error("failed to get aws creds\n");
-        return -EIO;
+        return -1;
     }  
 
-    if(getawsconfig(&creds) < 0) {
+    struct awsconfig config;
+    if(getawsconfig(&config) < 0) {
         error("failed to get aws config\n");
-        return -EIO;
+        return -1;
     }
 
-    debug("aws info:\nAWS key: %s\nAWS secret: %s\nAWS region: %s\n", creds.key, creds.secret, creds.region);
+    debug("aws info:\nAWS key: %s\nAWS secret: %s\nAWS region: %s\n", creds.key, creds.secret, config.region);
 
     int sock = bucketconnect();
     if(sock < 0) {
         error("failed to connect to bucket\n");
-        return -EIO;
+        return -1;
     }
 
     // create date/times
     char timestamp[20]; 
     if(awstime(timestamp, sizeof(timestamp)) != 0) {
         error("failed to get aws time\n");
-        return -EIO;
+        return -1;
     }
 
     char date[20]; 
     if(awsdate(date, sizeof(date)) != 0) {
         error("failed to get aws date\n");
-        return -EIO;
+        return -1;
     }
 
-    char signature[SHA256_DIGEST_LENGTH * 2 + 1];
-    if(getawssignature(signature, sizeof(signature), &creds, date, timestamp) < 0) {
-        error("failed to get aws signature\n");
-        return -EIO;
+    char *payload = "";
+    char payloadhex[HEX_LEN];
+    if(sha256hex(payloadhex, sizeof(payloadhex), payload) != 0) {
+        error("failed to sha256 hex the payload\n");
+        return -1;  
     }
 
-    debug("signature: %s\n", signature);
+    // build canonical request
+    char canonical[BUFSIZ];
+    if(getcanonicalreq(
+        canonical, 
+        sizeof(canonical), 
+        "GET", 
+        BUCKET, 
+        config.region, 
+        payloadhex, 
+        timestamp
+    )) {
+        error("failed to get canonical req\n");
+        return -1;
+    }
 
+    debug("canonical:\n%s\n", canonical);
+
+    char canonicalhex[HEX_LEN];
+    if(sha256hex(canonicalhex, sizeof(canonicalhex), canonical) != 0) {
+        error("failed to sha256 hex the canonical request\n");
+        return -1;  
+    }
+
+    char tosign[BUFSIZ];
+    if(getstringtosign(
+        tosign,
+        sizeof(tosign),
+        timestamp,
+        date,
+        config.region,
+        canonicalhex
+    ) != 0) {
+        error("failed to get string to sign\n");
+        return -1;  
+    }
+
+    debug("to sign:\n%s\n", tosign);
+
+    char signature[HEX_LEN];
+    if(createsignature(
+        signature,
+        sizeof(signature),
+        tosign,
+        creds.secret,
+        date,
+        config.region
+    ) != 0) {
+        error("failed to create signature\n");
+        return -1;  
+    }
+   
     // create the http req
     char req[1024];
     snprintf(
@@ -539,49 +334,45 @@ int main(int argc, char *argv[]) {
         "GET /?encoding-type=url&list-type=2&prefix= HTTP/1.1\r\n"
         "Host: %s.s3.%s.amazonaws.com\r\n"
         "x-amz-date: %s\r\n"
-        "x-amz-content-sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\r\n"
+        "x-amz-content-sha256: %s\r\n"
         "Authorization: AWS4-HMAC-SHA256 Credential=%s/%s/%s/s3/aws4_request,SignedHeaders=host;x-amz-content-sha256;x-amz-date,Signature=%s\r\n\r\n",
         BUCKET,
-        creds.region,
+        config.region,
         timestamp,
+        payloadhex,
         creds.key,
         date,
-        creds.region,
+        config.region,
         signature
     );
     
     debug("http req:\n%s\n", req);
 
-    // send the http req
-    int sent = 0;
-    while(sent < strlen(req)) {
-        info("sending...\n");
-        int res = send(sock, req + sent, strlen(req) - sent, 0);
-        if(res == -1) {
-            error("failed to send request\n");
-            return -EIO;
-        }
-
-        sent += res;
+    if(httpsend(sock, req) != 0) {
+        error("failed to send http req\n");
+        return -1;  
     }
 
-    // receive the http response
-    char *response = (char*) malloc(0);
-	char BUF[BUFSIZ];
-	size_t recived_len = 0;
-	while((recived_len = recv(sock, BUF, BUFSIZ-1, 0)) > 0) {
-        info("receiving...\n");
-        BUF[recived_len] = '\0';
-		response = (char*) realloc(response, strlen(response) + strlen(BUF) + 1);
-		sprintf(response, "%s%s", response, BUF);
-	}
+    char response[BUFSIZ];
+    if(httpreceive(sock, response, sizeof(response)) != 0) {
+        error("failed to receive http res\n");
+        return -1;  
+    }
 
-    fprintf(stdout, "%s\n", response);
+    debug("http res:\n%s\n", response);
+
+    char sub[BUFSIZ];
+    if(getuntil(sub, sizeof(sub), response, "\r\n") != 0) {
+        error("failed to parse response\n");
+        return -1;  
+    }
+
+    info("%s\n", sub);
 
     close(sock);
     free(creds.key);
     free(creds.secret);
-    free(creds.region);
+    free(config.region);
 
     return 0;
     // return fuse_main(argc, argv, &ops, NULL);
