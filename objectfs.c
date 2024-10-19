@@ -12,6 +12,10 @@
 #include <awsv4.h>
 #include <aws.h>
 #include <fuse.h>
+#include <libxml/xpathInternals.h>
+#include <libxml/parser.h>
+#include <libxml/tree.h>
+#include <libxml/xpath.h>
 #include <netinet/in.h>
 #include <openssl/hmac.h>
 #include <openssl/sha.h>
@@ -99,30 +103,6 @@ int httpreceive(const int sock, char *output, const size_t len) {
     if(currentrec < 0) {
         error("failed to receive http response");
         return -1;
-    }
-
-    return 0;
-}
-
-int getuntil(char *output, const size_t len, const char *input, const char *until) {
-    if(output == NULL) {
-        error("output buffer must not be null\n");
-        return -1;
-    }
-
-    const char *pos = strstr(input, until);
-    if (pos != NULL) {
-        size_t sublen = pos - input;
-        if (sublen >= len) {
-            error("buffer size too small for substring. must be at least: %zu\n", sublen);
-            return -1;
-        }
-
-        strncpy(output, input, sublen);
-        output[sublen] = '\0';
-    } else {
-        strncpy(output, input, len - 1);
-        output[len - 1] = '\0';
     }
 
     return 0;
@@ -361,14 +341,80 @@ int main(int argc, char *argv[]) {
 
     debug("http res:\n%s\n", response);
 
-    char sub[BUFSIZ];
-    if(getuntil(sub, sizeof(sub), response, "\r\n") != 0) {
-        error("failed to parse response\n");
-        return -1;  
+    int code;
+    sscanf(response, "HTTP/1.1 %d", &code); // TODO error?
+    info("code: %d\n", code);
+
+    char *chunk = strstr(response, "\r\n\r\n"); // TODO error?
+    chunk += 4;
+
+    char xml[BUFSIZ];
+    char *xmlp = xml;
+    while(1) {
+        int contentlength;
+        sscanf(chunk, "%x\r\n", &contentlength); // TODO error?
+        info("content length: %d\n", contentlength);
+
+        if(contentlength < 1) {
+            break;
+        }
+
+        chunk = strstr(chunk, "\r\n"); // TODO error?
+        chunk += 2;
+
+        info("xml:\n%s\n", chunk);
+
+        strncpy(xmlp, chunk, contentlength);
+        xmlp += contentlength;
+
+        chunk = strstr(chunk, "\r\n");
+        chunk += 2;
     }
 
-    info("%s\n", sub);
+    *xmlp = '\0';
 
+    info("xml:\n%s\n", xml);
+
+    if(code > 299 || code < 200) {
+        error("non 2xx http response: %d\n%s\n", code, xml);
+        return -1;
+    }
+
+    xmlInitParser();
+    xmlDocPtr xmldoc = xmlParseMemory(xml, strlen(xml));
+    if(xmldoc == NULL) {
+        error("error parsing xml string\n");
+        return -1;
+    }
+
+    // /ListBucketResult/Contents/Key
+    xmlXPathContextPtr xpathctx = xmlXPathNewContext(xmldoc);
+    if(xpathctx == NULL) {
+        error("error to get xpath context\n");
+        return -1;
+    }
+
+    xmlXPathRegisterNs(xpathctx, NULL, NULL);
+    const char *xpath = "//Key";
+    xmlXPathObjectPtr xpathobj = xmlXPathEvalExpression((xmlChar *) xpath, xpathctx);
+    if(xpathobj == NULL) {
+        error("failed to evaluate xpath\n");
+        return -1;
+    } else if(xmlXPathNodeSetIsEmpty(xpathobj->nodesetval)) {
+        // TODO
+        xmlXPathFreeObject(xpathobj);
+        info("no files found\n");
+    } else {
+        for(int i = 0; i < xpathobj->nodesetval->nodeNr; i++) {
+            xmlNodePtr xmlnode = xpathobj->nodesetval->nodeTab[i];
+            xmlChar *xmlcontent = xmlNodeGetContent(xmlnode);
+            info("key: %s\n", xmlcontent);
+        }
+    }
+    
+    xmlXPathFreeContext(xpathctx);
+    xmlFreeDoc(xmldoc);
+    xmlCleanupParser();
     close(sock);
     free(creds.key);
     free(creds.secret);
