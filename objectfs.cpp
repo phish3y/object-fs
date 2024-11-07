@@ -95,6 +95,24 @@ int object_mknod(
     return 0;
 }
 
+int object_mkdir(
+    const char *path, 
+    mode_t mode
+) {
+    spdlog::debug("`_mkdir` called for: {}, size: {}, offset: {}", path);
+    if(!s3Client) {
+        spdlog::error("client uninitialized");
+        return -EIO;
+    }
+
+    path++;
+
+    std::string key = std::string(path) + KEEP_FILE;
+    spdlog::info("{}", key);
+
+    return 0;
+}
+
 int object_unlink(const char *path) {
     spdlog::debug("`_unlink` called for: {}", path);
     if(!s3Client) {
@@ -253,47 +271,20 @@ int object_read(
     return bytesread;
 }
 
-// static int object_mkdir(
-//     const char *path, 
-//     mode_t mode
-// ) {
-//     spdlog::debug("`object_mkdir` called for: %s\n", path);
-
-//     return 0;
-// }
-
 // static int object_rmdir(const char *path) {
 //     spdlog::debug("`object_rmdir` called for: %s\n", path);
 
 //     return 0;
 // }
 
-// static int object_unlink(const char *path) {
-//     spdlog::debug("`object_unlink` called for: %s\n", path);
-
-//     return 0;
-// }
-
-// static int object_write(
-//     const char *path, 
-//     const char *buf, 
-//     size_t size, 
-//     off_t offset, 
-//     struct fuse_file_info *fi
-// ) {
-//     spdlog::debug("`object_write` called for: %s\n", path);
-
-//     return size;
-// }
-
 static struct fuse_operations ops = {
     .getattr = object_getattr,
     .mknod = object_mknod,
+    .mkdir = object_mkdir,
     .unlink = object_unlink,
     .read = object_read,
     .write = object_write,
     .readdir = object_readdir,
-    // .mkdir = object_mkdir,
     // .rmdir = object_rmdir,
 };
 
