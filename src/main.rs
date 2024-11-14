@@ -1,3 +1,4 @@
+use aws_sdk_s3::Client;
 use clap::{Arg, Command};
 use fuser::{
     FileAttr, FileType, Filesystem, MountOption, ReplyAttr, ReplyData, ReplyDirectory, Request
@@ -8,13 +9,14 @@ use std::time::{Duration, UNIX_EPOCH};
 const TTL: Duration = Duration::from_secs(1); // 1 second
 
 struct ObjectFS {
+    client: Client,
     root_attr: FileAttr,
     fioc_file_attr: FileAttr,
 }
 
 impl ObjectFS {
 
-    fn new() -> Self {
+    fn new(client: Client) -> Self {
         let uid = unsafe { libc::getuid() };
         let gid = unsafe { libc::getgid() };
 
@@ -55,6 +57,7 @@ impl ObjectFS {
         };
 
         Self {
+            client,
             root_attr,
             fioc_file_attr,
         }
@@ -117,7 +120,8 @@ impl Filesystem for ObjectFS {
     ) {}
 }
 
-fn main() {
+#[::tokio::main]
+async fn main() {
     let matches = Command::new("objectfs")
         .arg(
             Arg::new("MOUNT_POINT")
@@ -133,6 +137,9 @@ fn main() {
     options.push(MountOption::AutoUnmount);
     options.push(MountOption::AllowRoot);    
 
-    let fs = ObjectFS::new();
+    let config = aws_config::load_from_env().await;
+    let client = aws_sdk_s3::Client::new(&config);
+
+    let fs = ObjectFS::new(client);
     fuser::mount2(fs, mountpoint, &options).unwrap();
 }
