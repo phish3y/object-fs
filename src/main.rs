@@ -1,7 +1,7 @@
 use aws_sdk_s3::{primitives::ByteStream, Client};
 use clap::{Arg, Command};
 use fuser::{
-    FileAttr, FileType, Filesystem, MountOption, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, Request
+    FileAttr, FileType, Filesystem, MountOption, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, ReplyWrite, Request
 };
 use libc::{EIO, ENOENT};
 use std::{collections::HashMap, ffi::OsStr, sync::Mutex, time::{Duration, SystemTime}};
@@ -98,12 +98,12 @@ impl Filesystem for ObjectFS {
         _req: &Request, 
         parent: u64, 
         name: &OsStr, 
-        rep: ReplyEntry
+        reply: ReplyEntry
     ) {
         log::debug!("`lookup` parent: {}, name: {:?}", parent, name);
 
         if parent == ROOT_INO && name == "/" {
-            rep.entry(&TTL, &self.root_attr(), 0);
+            reply.entry(&TTL, &self.root_attr(), 0);
             return;
         }
 
@@ -120,8 +120,7 @@ impl Filesystem for ObjectFS {
             let key = format!(
                 "{}{}", 
                 key, 
-                name.to_str()
-                    .unwrap(), // TODO
+                name.to_string_lossy()
             );
 
             let head_res = tokio::task::block_in_place(|| {
@@ -139,10 +138,10 @@ impl Filesystem for ObjectFS {
                     if let Some(svc_err) = err.as_service_error() {
                         if svc_err.is_not_found() {
                             log::warn!("`lookup` not found: {}", &key);
-                            rep.error(ENOENT);
+                            reply.error(ENOENT);
                         } else {
                             log::error!("`lookup` failed to head_object: {}", err);
-                            rep.error(EIO);
+                            reply.error(EIO);
                         }
                     }
 
@@ -187,11 +186,11 @@ impl Filesystem for ObjectFS {
                 flags: 0,
             };
             
-            rep.entry(&TTL, &fa, 0); // TODO generation?
+            reply.entry(&TTL, &fa, 0); // TODO generation?
         } else {
             // TODO
             log::error!("`lookup` i should not yet be here");
-            rep.error(ENOENT);
+            reply.error(ENOENT);
         }
     }
 
@@ -200,12 +199,12 @@ impl Filesystem for ObjectFS {
         _req: &Request, 
         ino: u64, 
         fh: Option<u64>, 
-        rep: ReplyAttr
+        reply: ReplyAttr
     ) {
         log::debug!("`getattr` ino: {}, fh: {}", ino, fh.unwrap_or(0));
 
         if ino == ROOT_INO {
-            rep.attr(&TTL, &self.root_attr());
+            reply.attr(&TTL, &self.root_attr());
             return;
         }
 
@@ -233,11 +232,11 @@ impl Filesystem for ObjectFS {
                 Err(err) => {   
                     if let Some(svc_err) = err.as_service_error() {
                         if svc_err.is_not_found() {
-                            log::warn!("`lookup` not found: {}", &key);
-                            rep.error(ENOENT);
+                            log::warn!("`getattr` not found: {}", &key);
+                            reply.error(ENOENT);
                         } else {
-                            log::error!("`lookup` failed to head_object: {}", err);
-                            rep.error(EIO);
+                            log::error!("`getattr` failed to head_object: {}", err);
+                            reply.error(EIO);
                         }
                     }
 
@@ -282,11 +281,11 @@ impl Filesystem for ObjectFS {
                 flags: 0,
             };
 
-            rep.attr(&TTL, &fa);
+            reply.attr(&TTL, &fa);
         } else {
             // TODO
             log::error!("`lookup` i should not yet be here");
-            rep.error(ENOENT);
+            reply.error(ENOENT);
         }
     }
 
@@ -296,13 +295,82 @@ impl Filesystem for ObjectFS {
         _req: &Request,
         parent: u64,
         name: &OsStr,
-        mut mode: u32,
+        mode: u32,
         _umask: u32,
         _rdev: u32,
-        rep: ReplyEntry,
+        reply: ReplyEntry,
     ) {
         log::debug!("`mknod` parent: {}, name: {:?}, mode: {}", parent, name, mode);
+
+        if (mode & libc::S_IFMT) != libc::S_IFREG { // TODO support link
+            reply.error(libc::EOPNOTSUPP);
+            return;
+        }
+
+        let mut lock_ino_to_key = self.ino_to_key
+            .lock()
+            .unwrap(); // TODO
+
+        let mut lock_key_to_ino = self.key_to_ino
+            .lock()
+            .unwrap(); // TODO
+
+        let key = match lock_ino_to_key.get(&parent) {
+            None => {
+                // TODO shouldn't ever get here right now
+                log::error!("`mknod` failed to find parent key for ino: {}", parent);
+                reply.error(ENOENT);
+                return;
+            }
+            Some(key) => key
+        };
+
+        let key = format!("{}{}", key, name.to_string_lossy()); // TODO only suppots root
+
+        let put_res = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                self.client.put_object()
+                    .bucket(&self.bucket)
+                    .key(&key)
+                    .send()
+                    .await
+            })
+        });
+
+        match put_res {
+            Err(err) => {
+                log::error!("`mknod` failed to put_object: {}", err);
+                reply.error(EIO);
+                return;
+            }
+            Ok(_) => {
+                let next_ino = self.next_ino();
+                let fa = FileAttr {
+                    ino: next_ino,
+                    size: 0,
+                    blksize: 0,
+                    blocks: 0,
+                    atime: SystemTime::now(),
+                    mtime: SystemTime::now(),
+                    ctime: SystemTime::now(),
+                    crtime: SystemTime::now(),
+                    kind: fuser::FileType::RegularFile,
+                    perm: 0o755,
+                    nlink: 2,
+                    uid: 0,
+                    gid: 0,
+                    rdev: 0,
+                    flags: 0,
+                };
+
+                lock_ino_to_key.insert(next_ino, key.clone());
+                lock_key_to_ino.insert(key, next_ino);
+
+                reply.entry(&TTL, &fa, 0);
+            }
+        }
     }
+    
 
     fn read(
         &mut self,
@@ -313,7 +381,7 @@ impl Filesystem for ObjectFS {
         size: u32,
         _flags: i32,
         _lock_owner: Option<u64>,
-        rep: ReplyData,
+        reply: ReplyData,
     ) {
         log::debug!("`read` ino: {}, fh: {}, offset: {}, size: {}", ino, fh, offset, size);
 
@@ -324,8 +392,8 @@ impl Filesystem for ObjectFS {
         let key = match lock_ino_to_key.get(&ino) {
             Some(key) => key,
             None => {
-                log::warn!("no entry for ino: {}", ino);
-                rep.error(ENOENT);
+                log::error!("no entry for ino: {}", ino);
+                reply.error(ENOENT);
                 return;
             }
         };
@@ -349,7 +417,93 @@ impl Filesystem for ObjectFS {
             })
         });
 
-        rep.data(&buffer.into_bytes())
+        reply.data(&buffer.into_bytes())
+    }
+
+    fn write(
+        &mut self,
+        _req: &Request<'_>,
+        ino: u64,
+        fh: u64,
+        offset: i64,
+        data: &[u8],
+        _write_flags: u32,
+        _flags: i32,
+        _lock_owner: Option<u64>,
+        reply: ReplyWrite,
+    ) {
+        log::debug!("`write` ino: {}, fh: {}, offset: {}, len: {}", ino, fh, offset, data.len());
+
+        let lock_ino_to_key = self.ino_to_key
+            .lock()
+            .unwrap(); // TODO
+    
+        let key = match lock_ino_to_key.get(&ino) {
+            None => {
+                log::error!("no entry for ino: {}", ino);
+                reply.error(ENOENT);
+                return;
+            }
+            Some(key) => key
+        };
+
+        let get_res = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                self.client.get_object()
+                    .bucket(&self.bucket)
+                    .key(key)
+                    .send()
+                    .await
+            })
+        });
+        
+        let mut existing_data = match get_res {
+            Err(err) => {   
+                if let Some(svc_err) = err.as_service_error() {
+                    if !svc_err.is_no_such_key() {
+                        log::error!("`write` failed to get_object: {}", err);
+                        reply.error(EIO);
+                        return;
+                    }
+                }
+
+                Vec::new()
+            }
+            Ok(get) => {
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        let body = get.body.collect().await;
+                        body.map_or_else(
+                            |err| {
+                                log::warn!("`write` failed to collect body: {}", err);
+                                Vec::new()
+                            },
+                            |data| data.to_vec()
+                        )
+                    })
+                })
+            }
+        };
+
+        let end_offset = offset as usize + data.len();
+        if end_offset > existing_data.len() {
+            existing_data.resize(end_offset, 0);
+        }
+        existing_data[offset as usize..end_offset].copy_from_slice(data);
+
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                self.client.put_object()
+                    .bucket(&self.bucket)
+                    .key(key)
+                    .body(ByteStream::from(existing_data))
+                    .send()
+                    .await
+                    .unwrap() // TODO
+            })
+        });
+
+        reply.written(data.len() as u32);
     }
 
     fn readdir(
@@ -358,13 +512,13 @@ impl Filesystem for ObjectFS {
         ino: u64,
         fh: u64,
         offset: i64,
-        mut rep: ReplyDirectory,
+        mut reply: ReplyDirectory,
     ) {
         log::debug!("`readdir` ino: {}, fh: {}, offset: {}", ino, fh, offset);
 
         let mut lock_key_to_ino = self.key_to_ino
             .lock()
-            .unwrap();
+            .unwrap(); // TODO
 
         let mut lock_ino_to_key = self.ino_to_key
             .lock()
@@ -406,12 +560,12 @@ impl Filesystem for ObjectFS {
 
         for (i, entry) in entries.into_iter().enumerate().skip(offset as usize) {
             let next_offset = (i + 1) as i64;
-            if rep.add(entry.0, next_offset, entry.1, entry.2.clone()) {
+            if reply.add(entry.0, next_offset, entry.1, entry.2.clone()) {
                 break;
             }
         }
 
-        rep.ok();
+        reply.ok();
     }
 }
 
