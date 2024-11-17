@@ -371,6 +371,17 @@ impl Filesystem for ObjectFS {
         }
     }
     
+    fn mkdir(
+        &mut self,
+        _req: &Request<'_>,
+        parent: u64,
+        name: &OsStr,
+        mode: u32,
+        umask: u32,
+        reply: ReplyEntry,
+    ) {
+        log::debug!("`read` parent: {}, name: {:?}, mode: {}, umask: {}", parent, name, mode, umask);
+    }
 
     fn read(
         &mut self,
