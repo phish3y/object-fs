@@ -1,3 +1,4 @@
+use aws_sdk_s3::{operation::head_object::HeadObjectOutput, primitives::DateTime};
 use clap::{Arg, Command};
 use fuser::{
     FileAttr, 
@@ -73,15 +74,116 @@ impl<'a> ObjectFS<'a> {
         return *cur_ino;
     }
 
-    fn get_parent(&self, s: &str) -> Option<String> {
-        let mut chars = s.chars();
-        if s.ends_with('/') {
-            chars.next_back();
-        }
+    fn index_file_path(&self, path: &str, size: Option<i64>, modified_time: Option<DateTime>) {
+        let size = size.unwrap_or(0) as u64; // TODO
+        let secs = if modified_time.is_some() {
+            modified_time.unwrap().secs()
+        } else {
+            0
+        };
+        let nanos = if modified_time.is_some() {
+            modified_time.unwrap().subsec_nanos()
+        } else {
+            0
+        };
+        let atime = SystemTime::UNIX_EPOCH + Duration::new(secs as u64, nanos);
 
-        let s = chars.as_str();
-        match s.rfind('/') {
-            Some(pos) if pos > 0 => Some(s[..pos].to_string()),
+        let ino = self.next_ino();
+        let attr = FileAttr {
+            ino,
+            size,
+            blksize: 0, // TODO
+            blocks: 0, // TODO
+            atime,
+            mtime: SystemTime::now(),
+            ctime: SystemTime::now(),
+            crtime: SystemTime::now(),
+            kind: fuser::FileType::RegularFile,
+            perm: 0o755,
+            nlink: 1,
+            uid: 0,
+            gid: 0,
+            rdev: 0,
+            flags: 0,
+        };
+
+        let mut parent = self.get_parent(path);
+        while let Some(p) = parent {
+            println!("{}", p);
+
+
+
+            parent = self.get_parent(&p);
+        }
+    }
+
+    fn index_file(
+        &self, 
+        path: &str, 
+        size: Option<i64>, 
+        modified_time: Option<DateTime>, 
+        parent: u64
+    ) -> Result<(), i32> {
+        let size = size.unwrap_or(0) as u64;
+
+        let secs = if modified_time.is_some() {
+            modified_time.unwrap().secs()
+        } else {
+            0
+        };
+        let nanos = if modified_time.is_some() {
+            modified_time.unwrap().subsec_nanos()
+        } else {
+            0
+        };
+        let atime = SystemTime::UNIX_EPOCH + Duration::new(secs as u64, nanos);
+
+        let ino = self.next_ino();
+
+        let node = model::fs::Node {
+            attr: FileAttr {
+                ino,
+                size,
+                blksize: 0, // TODO
+                blocks: 0, // TODO
+                atime,
+                mtime: SystemTime::now(),
+                ctime: SystemTime::now(),
+                crtime: SystemTime::now(),
+                kind: fuser::FileType::RegularFile,
+                perm: 0o755,
+                nlink: 1,
+                uid: 0,
+                gid: 0,
+                rdev: 0,
+                flags: 0,
+            },
+            key: path.to_string(),
+            parent
+        };
+
+        self.ino_to_node
+            .lock()
+            .unwrap()
+            .insert(ino, node.clone());
+
+        self.key_to_node
+            .lock()
+            .unwrap()
+            .insert(path.to_string(), node);
+
+        Ok(())
+    }
+
+    fn get_parent(&self, path: &str) -> Option<String> {
+        let path = if path.ends_with('/') {
+            &path[..path.len() - 1]
+        } else {
+            path
+        };
+
+        match path.rfind('/') {
+            Some(pos) if pos > 0 => Some(path[..pos].to_string()),
             _ => None,
         }
     }
@@ -103,6 +205,49 @@ mod tests {
         for expected in cases {
             let result = fs.next_ino();
             assert_eq!(result, expected);
+        }
+    }
+
+    #[test]
+    fn test_index_file_path() {
+        let client = model::s3::MockS3Client{};
+        let fs = ObjectFS::new(&client, "dummy-bucket");
+
+        let cases = vec![
+            "file",
+            "folder/file",
+            "folder/subfolder/file",
+        ];
+
+        for input in cases {
+            // fs.index_file_path(input);
+        }
+    }
+
+    #[test]
+    fn test_index_file() {
+        let client = model::s3::MockS3Client{};
+        let fs = ObjectFS::new(&client, "dummy-bucket");
+
+        let cases = vec![
+            ("/file", Some(10), 10, Some(DateTime::from_secs(1_695_084_900)), 1),
+            ("folder/file", None, 0, None, 5),
+            ("folder/subfolder/file", Some(0), 0, Some(DateTime::from_secs(0)), 7)
+        ];
+
+        for (path, size, expected_size, modified_time, parent) in cases {
+            let fs = ObjectFS::new(&client, "dummy-bucket");
+            fs.index_file(path, size, modified_time, parent).unwrap();
+            
+            let guard = fs.ino_to_node
+                .lock()
+                .unwrap();
+            let result = guard.get(&2).unwrap();
+            assert_eq!(result.parent, parent, "failed on parent for case: {}", path);
+            assert_eq!(result.key, path, "failed on key for case: {}", path);
+            assert_eq!(result.attr.ino, 2, "failed on ino for case: {}", path);
+            assert_eq!(result.attr.size, expected_size, "failed on size for case: {}", path);
+            println!("{:?}", result.attr.atime);
         }
     }
 
@@ -170,11 +315,32 @@ impl Filesystem for ObjectFS<'_> {
 
                     for obj in lo.contents() {
                         if let Some(key) = obj.key() {
-                            let ho = self.client.head_object(&self.bucket, key).await.unwrap();
+                            let res = self.client
+                                .head_object(&self.bucket, key)
+                                .await;
+
+                            let ho = match res {
+                                Err(err) => {
+                                    log::error!("`init` failed to head_object: {}, {}", key, err);
+                                    return Err(-1);
+                                }
+                                Ok(ho) => ho
+                            };
 
                             log::info!("{}", key);
                             log::info!("{:?}", ho.content_type());
                             if ho.content_type().unwrap_or("").contains("application/x-directory") {
+                                let keep = format!("{}{}", key, KEEP_FILE);
+                                match self.client.put_object(&self.bucket, &keep).await {
+                                    Err(err) => {
+                                        log::error!("`init` failed to put_object: {}, {}", keep, err);
+                                        return Err(-1); 
+                                    }
+                                    Ok(_) => ()
+                                }
+
+                                
+
 
                             } else {
 
