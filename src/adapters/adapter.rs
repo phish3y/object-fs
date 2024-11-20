@@ -19,4 +19,10 @@ pub trait ObjectAdapter {
         bucket: &str,
         key: &str
     ) -> Result<model::fs::FSObject, model::fs::FSError>;
+
+    fn fs_download_object(
+        &self,
+        bucket: &str,
+        key: &str
+    ) -> Result<Vec<u8>, model::fs::FSError>;
 }

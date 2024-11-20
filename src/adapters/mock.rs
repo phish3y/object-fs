@@ -33,4 +33,12 @@ impl adapters::adapter::ObjectAdapter for MockS3Client {
             modified_time: SystemTime::now()
         })
     }
+
+    fn fs_download_object(
+        &self,
+        _bucket: &str,
+        _key: &str
+    ) -> Result<Vec<u8>, model::fs::FSError> {
+        Ok(Vec::new())
+    }
 }

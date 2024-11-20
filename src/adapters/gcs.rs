@@ -1,7 +1,7 @@
 use std::time::{Duration, SystemTime};
 
 use google_cloud_storage::http::objects::{
-    get::GetObjectRequest, list::ListObjectsRequest, upload::{Media, UploadObjectRequest, UploadType}
+    download::Range, get::GetObjectRequest, list::ListObjectsRequest, upload::{Media, UploadObjectRequest, UploadType}
 };
 
 use crate::{adapters, model};
@@ -18,7 +18,7 @@ impl adapters::adapter::ObjectAdapter for google_cloud_storage::client::Client {
             ..Default::default()
         };
         
-        let res = tokio::task::block_in_place(|| {
+        tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 self.upload_object(
                     &req, 
@@ -26,16 +26,11 @@ impl adapters::adapter::ObjectAdapter for google_cloud_storage::client::Client {
                     &UploadType::Simple(Media::new(key.to_string()))
                 ).await
             })
-        });
-
-        match res {
-            Err(err) => {
-                return Err(model::fs::FSError{
-                    message: format!("failed to put_object at: {}, {}", key, err.to_string())
-                });
+        }).map_err(|err|
+            model::fs::FSError{
+                message: format!("failed to put_object at: {}, {}", key, err.to_string())
             }
-            Ok(_) => ()
-        }
+        )?;
 
         Ok(())
     }
@@ -56,20 +51,15 @@ impl adapters::adapter::ObjectAdapter for google_cloud_storage::client::Client {
                 ..Default::default()
             };
 
-            let res = tokio::task::block_in_place(|| {
+            let lo = tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async {
                     self.list_objects(&req).await
                 })
-            });
-
-            let lo = match res {
-                Err(err) => {
-                    return Err(model::fs::FSError{
-                        message: format!("failed to list_objects at: {}, {}", prefix, err.to_string())
-                    });
+            }).map_err(|err|
+                model::fs::FSError{
+                    message: format!("failed to list_objects at: {}, {}", prefix, err.to_string())
                 }
-                Ok(lo) => lo
-            };
+            )?;
 
             if let Some(objs) = lo.items {
                 for obj in objs {
@@ -106,20 +96,15 @@ impl adapters::adapter::ObjectAdapter for google_cloud_storage::client::Client {
             ..Default::default()
         };
 
-        let res = tokio::task::block_in_place(|| {
+        let o = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 self.get_object(&req).await
             })
-        });
-
-        let o = match res {
-            Err(err) => {
-                return Err(model::fs::FSError{
-                    message: format!("failed to get_object: {}, {}", key, err.to_string())
-                });
+        }).map_err(|err|
+            model::fs::FSError{
+                message: format!("failed to get_object: {}, {}", key, err.to_string())
             }
-            Ok(o) => o
-        };
+        )?;
 
         let modified_time = SystemTime::UNIX_EPOCH + 
         Duration::from_secs(
@@ -133,5 +118,29 @@ impl adapters::adapter::ObjectAdapter for google_cloud_storage::client::Client {
                 modified_time
             }
         )
+    }
+
+    fn fs_download_object(
+            &self,
+            bucket: &str,
+            key: &str
+        ) -> Result<Vec<u8>, model::fs::FSError> {
+        let req = GetObjectRequest{
+            bucket: bucket.to_string(),
+            object: key.to_string(),
+            ..Default::default()
+        };
+
+        let bytes = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                self.download_object(&req, &Range::default()).await
+            })
+        }).map_err(|err|
+            model::fs::FSError{
+                message: format!("failed to get_object: {}, {}", key, err.to_string())
+            }
+        )?;
+
+        Ok(bytes)
     }
 }
