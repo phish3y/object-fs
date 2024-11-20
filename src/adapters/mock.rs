@@ -4,7 +4,7 @@ pub struct MockS3Client{}
 
 impl adapters::adapter::ObjectAdapter for MockS3Client {
 
-    fn put_object(
+    fn fs_put_object(
         &self, 
         _bucket: &str, 
         _key: &str
@@ -12,7 +12,7 @@ impl adapters::adapter::ObjectAdapter for MockS3Client {
         Ok(())
     }
 
-    fn list_objects(
+    fn fs_list_objects(
         &self,
         _bucket: &str,
         _prefix: &str

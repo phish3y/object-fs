@@ -2,13 +2,13 @@ use crate::model;
 
 pub trait ObjectAdapter {
 
-    fn put_object(
+    fn fs_put_object(
         &self, 
         bucket: &str, 
         key: &str
     ) -> Result<(), model::fs::FSError>;
 
-    fn list_objects(
+    fn fs_list_objects(
         &self,
         bucket: &str,
         prefix: &str

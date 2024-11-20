@@ -464,7 +464,7 @@ impl Filesystem for ObjectFS<'_> {
         log::info!("`init` called");
 
         let res = self.client
-            .put_object(&self.bucket, KEEP_FILE);
+            .fs_put_object(&self.bucket, KEEP_FILE);
 
 
         match res {
@@ -479,7 +479,7 @@ impl Filesystem for ObjectFS<'_> {
             tokio::runtime::Handle::current().block_on(async {
                 let prefix = "";
                 let res = self.client
-                    .list_objects(&self.bucket, prefix);
+                    .fs_list_objects(&self.bucket, prefix);
 
                 let objects = match res {
                     Err(err) => {
@@ -492,7 +492,7 @@ impl Filesystem for ObjectFS<'_> {
                 for obj in objects {
                     let key = if obj.key.ends_with('/') {
                         let key = format!("{}{}", obj.key, KEEP_FILE);
-                        let res = self.client.put_object(&self.bucket, &key);
+                        let res = self.client.fs_put_object(&self.bucket, &key);
     
                         match res {
                             Err(err) => {

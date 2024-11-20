@@ -4,7 +4,7 @@ use crate::{adapters, model};
 
 impl adapters::adapter::ObjectAdapter for aws_sdk_s3::Client {
 
-    fn put_object(
+    fn fs_put_object(
         &self, 
         bucket: &str, 
         key: &str
@@ -31,7 +31,7 @@ impl adapters::adapter::ObjectAdapter for aws_sdk_s3::Client {
         Ok(())
     }
 
-    fn list_objects(
+    fn fs_list_objects(
         &self,
         bucket: &str,
         prefix: &str
