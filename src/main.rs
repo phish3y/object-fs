@@ -1,4 +1,3 @@
-use aws_sdk_s3::{operation::head_object::HeadObjectOutput, primitives::DateTime};
 use clap::{Arg, Command};
 use fuser::{
     FileAttr, 
@@ -12,26 +11,26 @@ use std::{
     time::{Duration, SystemTime}
 };
 
+mod adapters;
 mod model;
 
 const TTL: Duration = Duration::new(0, 0); 
 const ROOT_INO: u64 = 1;
 const KEEP_FILE: &str = ".keep";
 
-
 struct ObjectFS<'a> {
-    client: &'a dyn model::s3::ObjectFSS3,
+    client: &'a dyn adapters::adapter::ObjectAdapter,
     bucket: String,
     current_ino: Mutex<u64>,
-    ino_to_node: Mutex<HashMap<u64, model::fs::Node>>,
-    key_to_node: Mutex<HashMap<String, model::fs::Node>>
+    ino_to_node: Mutex<HashMap<u64, model::fs::FSNode>>,
+    key_to_node: Mutex<HashMap<String, model::fs::FSNode>>
 }
 
 impl<'a> ObjectFS<'a> {
 
-    fn new(client: &'a dyn model::s3::ObjectFSS3, bucket: &str) -> Self {
+    fn new(client: &'a dyn adapters::adapter::ObjectAdapter, bucket: &str) -> Self {
         let mut ino_to_node = HashMap::new();
-        let root_node = model::fs::Node {
+        let root_node = model::fs::FSNode {
             attr: FileAttr {
                 ino: ROOT_INO,
                 size: 0,
@@ -68,85 +67,77 @@ impl<'a> ObjectFS<'a> {
     }
 
     fn next_ino(&self) -> u64 {
-        let mut cur_ino = self.current_ino.lock().unwrap(); // TODO
+        let mut cur_ino = self.current_ino
+            .lock()
+            .expect("failed to acquire `current_ino` guard");
         *cur_ino += 1;
 
         return *cur_ino;
     }
 
-    fn index_file_path(&self, path: &str, size: Option<i64>, modified_time: Option<DateTime>) {
-        let size = size.unwrap_or(0) as u64; // TODO
-        let secs = if modified_time.is_some() {
-            modified_time.unwrap().secs()
-        } else {
-            0
-        };
-        let nanos = if modified_time.is_some() {
-            modified_time.unwrap().subsec_nanos()
-        } else {
-            0
-        };
-        let atime = SystemTime::UNIX_EPOCH + Duration::new(secs as u64, nanos);
+    fn index_object(
+        &self, 
+        object: &model::fs::FSObject
+    ) {
+        let mut components = Vec::new();
+        let mut maybe_component = Some(object.key.clone());
+        while let Some(component) = maybe_component {
+            components.push(component.clone());
+            maybe_component = self.get_parent(&component);
+        }
 
-        let ino = self.next_ino();
-        let attr = FileAttr {
-            ino,
-            size,
-            blksize: 0, // TODO
-            blocks: 0, // TODO
-            atime,
-            mtime: SystemTime::now(),
-            ctime: SystemTime::now(),
-            crtime: SystemTime::now(),
-            kind: fuser::FileType::RegularFile,
-            perm: 0o755,
-            nlink: 1,
-            uid: 0,
-            gid: 0,
-            rdev: 0,
-            flags: 0,
-        };
+        components.reverse();
 
-        let mut parent = self.get_parent(path);
-        while let Some(p) = parent {
-            println!("{}", p);
-
-
-
-            parent = self.get_parent(&p);
+        let mut parent_ino = ROOT_INO;
+        for component in components {
+            parent_ino = if component == object.key {
+                self.index_file(
+                    &model::fs::FSObject {
+                        key: component,
+                        size: object.size,
+                        modified_time: object.modified_time,
+                    },
+                    parent_ino
+                )
+            } else {
+                self.index_directory(
+                    &model::fs::FSObject {
+                        key: component,
+                        size: object.size,
+                        modified_time: object.modified_time,
+                    },
+                    parent_ino
+                )
+            }
         }
     }
 
     fn index_file(
         &self, 
-        path: &str, 
-        size: Option<i64>, 
-        modified_time: Option<DateTime>, 
+        object: &model::fs::FSObject, 
         parent: u64
-    ) -> Result<(), i32> {
-        let size = size.unwrap_or(0) as u64;
-
-        let secs = if modified_time.is_some() {
-            modified_time.unwrap().secs()
-        } else {
-            0
-        };
-        let nanos = if modified_time.is_some() {
-            modified_time.unwrap().subsec_nanos()
-        } else {
-            0
-        };
-        let atime = SystemTime::UNIX_EPOCH + Duration::new(secs as u64, nanos);
+    ) -> u64 {
+        if self.key_to_node
+            .lock()
+            .expect("failed to acquire `key_to_node` guard")
+            .get(&object.key).is_some() {
+            return self.key_to_node
+                .lock()
+                .expect("failed to acquire `key_to_node` guard")
+                .get(&object.key)
+                .unwrap()
+                .attr
+                .ino;
+        }
 
         let ino = self.next_ino();
-
-        let node = model::fs::Node {
+        let node = model::fs::FSNode {
             attr: FileAttr {
                 ino,
-                size,
+                size: object.size as u64,
                 blksize: 0, // TODO
                 blocks: 0, // TODO
-                atime,
+                atime: object.modified_time,
                 mtime: SystemTime::now(),
                 ctime: SystemTime::now(),
                 crtime: SystemTime::now(),
@@ -158,22 +149,83 @@ impl<'a> ObjectFS<'a> {
                 rdev: 0,
                 flags: 0,
             },
-            key: path.to_string(),
+            key: object.key.clone(),
             parent
         };
 
         self.ino_to_node
             .lock()
-            .unwrap()
+            .expect("failed to acquire `ino_to_node` guard")
             .insert(ino, node.clone());
 
         self.key_to_node
             .lock()
-            .unwrap()
-            .insert(path.to_string(), node);
+            .expect("failed to acquire `key_to_node` guard")
+            .insert(object.key.clone(), node);
 
-        Ok(())
+        return ino;
     }
+
+    fn index_directory(
+        &self, 
+        object: &model::fs::FSObject, 
+        parent: u64
+    ) -> u64 {
+        let key = if object.key.ends_with('/') {
+            &object.key[..object.key.len() - 1]
+        } else {
+            &object.key
+        };
+
+        if self.key_to_node
+            .lock()
+            .expect("failed to acquire `key_to_node` guard")
+            .get(key).is_some() {
+            return self.key_to_node
+                .lock()
+                .expect("failed to acquire `key_to_node` guard")
+                .get(key)
+                .unwrap()
+                .attr
+                .ino;
+        }
+
+        let ino = self.next_ino();
+        let node = model::fs::FSNode {
+            attr: FileAttr {
+                ino,
+                size: object.size as u64,
+                blksize: 0, // TODO
+                blocks: 0, // TODO
+                atime: object.modified_time,
+                mtime: SystemTime::now(),
+                ctime: SystemTime::now(),
+                crtime: SystemTime::now(),
+                kind: fuser::FileType::Directory,
+                perm: 0o755,
+                nlink: 1,
+                uid: 0,
+                gid: 0,
+                rdev: 0,
+                flags: 0,
+            },
+            key: object.key.clone(),
+            parent
+        };
+
+        self.ino_to_node
+            .lock()
+            .expect("failed to acquire `ino_to_node` lock")
+            .insert(ino, node.clone());
+
+        self.key_to_node
+            .lock()
+            .expect("failed to acquire `key_to_node` lock")
+            .insert(object.key.clone(), node);
+
+        return ino;
+    }
+
 
     fn get_parent(&self, path: &str) -> Option<String> {
         let path = if path.ends_with('/') {
@@ -195,7 +247,7 @@ mod tests {
 
     #[test]
     fn test_next_ino() {
-        let client = model::s3::MockS3Client{};
+        let client = adapters::mock::MockS3Client{};
         let fs = ObjectFS::new(&client, "dummy-bucket");
 
         let cases = vec![
@@ -209,51 +261,183 @@ mod tests {
     }
 
     #[test]
-    fn test_index_file_path() {
-        let client = model::s3::MockS3Client{};
+    fn test_index_object() {
+        let client = adapters::mock::MockS3Client{};
         let fs = ObjectFS::new(&client, "dummy-bucket");
 
         let cases = vec![
-            "file",
-            "folder/file",
-            "folder/subfolder/file",
+            ("file", 10, SystemTime::now(), 2),
+            ("folder/file", 5, SystemTime::now(), 4),
+            ("folder/subfolder/file", 5, SystemTime::now(), 6)
         ];
 
-        for input in cases {
-            // fs.index_file_path(input);
+        for (key, size, modified_time, expected_count) in cases {
+            
+            fs.index_object(
+                &model::fs::FSObject {
+                    key: key.to_string(),
+                    size,
+                    modified_time
+                }
+            );
+            let result = fs.key_to_node.lock().unwrap();
+            
+            assert_eq!(
+                result.keys().len(), 
+                expected_count, 
+                "failed index count for case: {}", key
+            );
         }
     }
 
     #[test]
     fn test_index_file() {
-        let client = model::s3::MockS3Client{};
-        let fs = ObjectFS::new(&client, "dummy-bucket");
+        let client = adapters::mock::MockS3Client{};
 
         let cases = vec![
-            ("/file", Some(10), 10, Some(DateTime::from_secs(1_695_084_900)), 1),
-            ("folder/file", None, 0, None, 5),
-            ("folder/subfolder/file", Some(0), 0, Some(DateTime::from_secs(0)), 7)
+            (
+                "/file", 
+                10, 
+                SystemTime::now(),
+                1
+            ),
+            (
+                "folder/file", 
+                0, 
+                SystemTime::now(), 
+                5
+            ),
+            (
+                "folder/subfolder/file", 
+                0, 
+                SystemTime::UNIX_EPOCH, 
+                7
+            )
         ];
 
-        for (path, size, expected_size, modified_time, parent) in cases {
+        for (key, size, modified_time, parent) in cases {
             let fs = ObjectFS::new(&client, "dummy-bucket");
-            fs.index_file(path, size, modified_time, parent).unwrap();
+            
+            let ino = fs.index_file(
+                &model::fs::FSObject {
+                    key: key.to_string(),
+                    size,
+                    modified_time
+                }, 
+                parent
+            );
             
             let guard = fs.ino_to_node
                 .lock()
                 .unwrap();
-            let result = guard.get(&2).unwrap();
-            assert_eq!(result.parent, parent, "failed on parent for case: {}", path);
-            assert_eq!(result.key, path, "failed on key for case: {}", path);
-            assert_eq!(result.attr.ino, 2, "failed on ino for case: {}", path);
-            assert_eq!(result.attr.size, expected_size, "failed on size for case: {}", path);
-            println!("{:?}", result.attr.atime);
+            let result = guard.get(&2)
+                .unwrap();
+
+            assert_eq!(
+                ino, 
+                2, 
+                "failed on `ino` for case: {}", key
+            );
+            assert_eq!(
+                result.attr.ino, 
+                2, 
+                "failed on `attr.ino` for case: {}", key
+            );
+            assert_eq!(
+                result.parent, 
+                parent, 
+                "failed on `parent` for case: {}", key
+            );
+            assert_eq!(
+                result.key, 
+                key, 
+                "failed on `key` for case: {}", 
+                key
+            );
+            assert_eq!(
+                result.attr.size, 
+                size as u64, "failed on `attr.size` for case: {}", key
+            );
+            assert_eq!(
+                result.attr.atime, 
+                modified_time, 
+                "failed on `attr.atime` for case: {}", 
+                key
+            );
+        }
+    }
+
+    #[test]
+    fn test_index_directory() {
+        let client = adapters::mock::MockS3Client{};
+
+        let cases = vec![
+            (
+                "folder", 
+                SystemTime::UNIX_EPOCH,
+                1
+            ),
+            (
+                "folder/", 
+                SystemTime::now(), 
+                5
+            ),
+            (
+                "folder/subfolder/", 
+                SystemTime::UNIX_EPOCH, 
+                7
+            )
+        ];
+
+        for (key, modified_time, parent) in cases {
+            let fs = ObjectFS::new(&client, "dummy-bucket");
+            
+            let ino = fs.index_directory(
+                &model::fs::FSObject {
+                    key: key.to_string(),
+                    size: 0,
+                    modified_time
+                }, 
+                parent
+            );
+            
+            let guard = fs.ino_to_node
+                .lock()
+                .unwrap();
+            let result = guard.get(&2)
+                .unwrap();
+
+            assert_eq!(
+                ino, 
+                2, 
+                "failed on `ino` for case: {}", key
+            );
+            assert_eq!(
+                result.attr.ino, 
+                2, 
+                "failed on `attr.ino` for case: {}", key
+            );
+            assert_eq!(
+                result.parent, 
+                parent, 
+                "failed on `parent` for case: {}", key
+            );
+            assert_eq!(
+                result.key, 
+                key, 
+                "failed on `key` for case: {}", key
+            );
+            assert_eq!(
+                result.attr.atime, 
+                modified_time, 
+                "failed on `attr.atime` for case: {}", key
+            );
         }
     }
 
     #[test]
     fn test_get_parent() {
-        let client = model::s3::MockS3Client{};
+        let client = adapters::mock::MockS3Client{};
         let fs = ObjectFS::new(&client, "dummy-bucket");
 
         let cases = vec![
@@ -279,86 +463,61 @@ impl Filesystem for ObjectFS<'_> {
     ) -> Result<(), libc::c_int> {
         log::info!("`init` called");
 
-        let put_res = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                self.client
-                    .put_object(&self.bucket, KEEP_FILE)
-                    .await
-            })
-        });
+        let res = self.client
+            .put_object(&self.bucket, KEEP_FILE);
 
-        match put_res {
+
+        match res {
             Err(err) => {
                 log::error!("`init` failed to put_object: {}", err);
                 return Err(-1);
             }
             Ok(_) => {}
         }
-
         
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
-                let mut con_token: Option<String> = None;
-                
-                loop {
-                    let res = self.client
-                        .list_objects_v2(&self.bucket, "", con_token)
-                        .await;
+                let prefix = "";
+                let res = self.client
+                    .list_objects(&self.bucket, prefix);
 
-                    let lo = match res {
-                        Err(err) => {
-                            log::error!("`init` failed to list_objects: {}", err);
-                            return Err(-1);
-                        }
-                        Ok(lo) => lo
+                let objects = match res {
+                    Err(err) => {
+                        log::error!("`init` failed to list_objects at: {}", err);
+                        return Err(-1);
+                    }
+                    Ok(objects) => objects
+                };
+
+                for obj in objects {
+                    let key = if obj.key.ends_with('/') {
+                        let key = format!("{}{}", obj.key, KEEP_FILE);
+                        let res = self.client.put_object(&self.bucket, &key);
+    
+                        match res {
+                            Err(err) => {
+                                log::error!("`init` failed to put_object: {}", err);
+                                return Err(-1);
+                            }
+                            Ok(_) => ()
+                        };
+    
+                        key
+                    } else {
+                        obj.key
                     };
 
-                    for obj in lo.contents() {
-                        if let Some(key) = obj.key() {
-                            let res = self.client
-                                .head_object(&self.bucket, key)
-                                .await;
-
-                            let ho = match res {
-                                Err(err) => {
-                                    log::error!("`init` failed to head_object: {}, {}", key, err);
-                                    return Err(-1);
-                                }
-                                Ok(ho) => ho
-                            };
-
-                            log::info!("{}", key);
-                            log::info!("{:?}", ho.content_type());
-                            if ho.content_type().unwrap_or("").contains("application/x-directory") {
-                                let keep = format!("{}{}", key, KEEP_FILE);
-                                match self.client.put_object(&self.bucket, &keep).await {
-                                    Err(err) => {
-                                        log::error!("`init` failed to put_object: {}, {}", keep, err);
-                                        return Err(-1); 
-                                    }
-                                    Ok(_) => ()
-                                }
-
-                                
-
-
-                            } else {
-
-                            }
-
-                        }
-                    }
-
-                    con_token = lo.next_continuation_token().map(|tok| tok.to_string());
-                    if con_token.is_none() {
-                        break;
-                    }
+                    self.index_object(&model::fs::FSObject {
+                        key,
+                        size: obj.size,
+                        modified_time: obj.modified_time
+                    });
                 }
-
+                
                 Ok(())
             })
         })?;
-
+        
         return Ok(());
     }
 
