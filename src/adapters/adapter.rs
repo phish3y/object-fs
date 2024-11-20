@@ -13,4 +13,10 @@ pub trait ObjectAdapter {
         bucket: &str,
         prefix: &str
     ) -> Result<Vec<model::fs::FSObject>, model::fs::FSError>;
+
+    fn fs_head_object(
+        &self,
+        bucket: &str,
+        key: &str
+    ) -> Result<model::fs::FSObject, model::fs::FSError>;
 }

@@ -101,6 +101,55 @@ impl adapters::adapter::ObjectAdapter for aws_sdk_s3::Client {
             }
         }
 
-        return Ok(objects);
+        Ok(objects)
+    }
+
+    fn fs_head_object(
+        &self,
+        bucket: &str,
+        key: &str
+    ) -> Result<model::fs::FSObject, model::fs::FSError> {
+        let req = self.head_object()
+            .bucket(bucket)
+            .key(key);
+
+        let res = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                req.send().await
+            })
+        });
+
+        let ho = match res {
+            Err(err) => {
+                return Err(model::fs::FSError{
+                    message: format!("failed to head_object: {}, {}", key, err.to_string())
+                });
+            }
+            Ok(ho) => ho
+        };
+
+        let secs = if ho.last_modified().is_some() {
+            ho.last_modified()
+                .unwrap()
+                .secs()
+        } else {
+            0
+        };
+        let nanos = if ho.last_modified().is_some() {
+            ho.last_modified()
+            .unwrap()
+            .subsec_nanos()
+        } else {
+            0
+        };
+        let modified_time = SystemTime::UNIX_EPOCH + Duration::new(secs as u64, nanos);
+
+        Ok(
+            model::fs::FSObject{
+                key: key.to_string(),
+                size: ho.content_length().unwrap_or(0),
+                modified_time
+            }
+        )
     }
 }

@@ -1,8 +1,7 @@
 use std::time::{Duration, SystemTime};
 
 use google_cloud_storage::http::objects::{
-    list::ListObjectsRequest, 
-    upload::{Media, UploadObjectRequest, UploadType}
+    get::GetObjectRequest, list::ListObjectsRequest, upload::{Media, UploadObjectRequest, UploadType}
 };
 
 use crate::{adapters, model};
@@ -94,5 +93,45 @@ impl adapters::adapter::ObjectAdapter for google_cloud_storage::client::Client {
         }
 
         Ok(objects)
+    }
+
+    fn fs_head_object(
+        &self,
+        bucket: &str,
+        key: &str
+    ) -> Result<model::fs::FSObject, model::fs::FSError> {
+        let req = GetObjectRequest{
+            bucket: bucket.to_string(),
+            object: key.to_string(),
+            ..Default::default()
+        };
+
+        let res = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                self.get_object(&req).await
+            })
+        });
+
+        let o = match res {
+            Err(err) => {
+                return Err(model::fs::FSError{
+                    message: format!("failed to get_object: {}, {}", key, err.to_string())
+                });
+            }
+            Ok(o) => o
+        };
+
+        let modified_time = SystemTime::UNIX_EPOCH + 
+        Duration::from_secs(
+            o.updated.unwrap_or(time::OffsetDateTime::now_utc()).unix_timestamp() as u64
+        );
+
+        Ok(
+            model::fs::FSObject{
+                key: o.name,
+                size: o.size,
+                modified_time
+            }
+        )
     }
 }
