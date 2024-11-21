@@ -1,8 +1,6 @@
 use std::time::{Duration, SystemTime};
 
-use tokio::io::AsyncReadExt;
-
-use crate::{adapters, model};
+use crate::{adapters, model, util};
 
 impl adapters::adapter::ObjectAdapter for aws_sdk_s3::Client {
 
@@ -15,11 +13,9 @@ impl adapters::adapter::ObjectAdapter for aws_sdk_s3::Client {
             .bucket(bucket)
             .key(key);
 
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                req.send().await
-            })
-        }).map_err(|err|
+        util::fs::poll_until_ready_error(
+            req.send()
+        ).map_err(|err|
             model::fs::FSError{
                 message: format!("failed to put_object at: {}, {}", key, err.to_string())
             }
@@ -45,11 +41,9 @@ impl adapters::adapter::ObjectAdapter for aws_sdk_s3::Client {
                 req = req.continuation_token(tok);
             }
 
-            let lo = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    req.send().await
-                })
-            }).map_err(|err|
+            let lo = util::fs::poll_until_ready_error(
+                req.send()
+            ).map_err(|err|
                 model::fs::FSError{
                     message: format!("failed to list_objects at: {}, {}", prefix, err.to_string())
                 }
@@ -105,11 +99,9 @@ impl adapters::adapter::ObjectAdapter for aws_sdk_s3::Client {
             .bucket(bucket)
             .key(key);
 
-        let ho = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                req.send().await
-            })
-        }).map_err(|err|
+        let ho = util::fs::poll_until_ready_error(
+            req.send()
+        ).map_err(|err|
             model::fs::FSError{
                 message: format!("failed to head_object: {}, {}", key, err.to_string())
             }
@@ -149,28 +141,22 @@ impl adapters::adapter::ObjectAdapter for aws_sdk_s3::Client {
             .bucket(bucket)
             .key(key);
 
-        let o = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                req.send().await
-            })
-        }).map_err(|err| 
+        let o = util::fs::poll_until_ready_error(
+            req.send()
+        ).map_err(|err| 
             model::fs::FSError{
                 message: format!("failed to get_object: {}, {}", key, err.to_string())
             }
         )?;
-
-        let mut body = o.body.into_async_read();
-        let mut buffer = Vec::new();
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                body.read_to_end(&mut buffer).await
-            })
-        }).map_err(|err| 
+    
+        let bytes = util::fs::poll_until_ready_error(
+            o.body.collect()
+        ).map_err(|err|
             model::fs::FSError{
-                message: format!("failed to read body from: {}, {}", key, err.to_string())
+                message: format!("failed to collect body: {}, {}", key, err.to_string())
             }
         )?;
-        
-        Ok(buffer)
+
+        Ok(bytes.into_bytes().to_vec())
     }
 }

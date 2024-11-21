@@ -4,7 +4,7 @@ use google_cloud_storage::http::objects::{
     download::Range, get::GetObjectRequest, list::ListObjectsRequest, upload::{Media, UploadObjectRequest, UploadType}
 };
 
-use crate::{adapters, model};
+use crate::{adapters, model, util};
 
 impl adapters::adapter::ObjectAdapter for google_cloud_storage::client::Client {
 
@@ -18,15 +18,13 @@ impl adapters::adapter::ObjectAdapter for google_cloud_storage::client::Client {
             ..Default::default()
         };
         
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                self.upload_object(
-                    &req, 
-                    "".as_bytes(), 
-                    &UploadType::Simple(Media::new(key.to_string()))
-                ).await
-            })
-        }).map_err(|err|
+        util::fs::poll_until_ready_error(
+            self.upload_object(
+                &req, 
+                "".as_bytes(), 
+                &UploadType::Simple(Media::new(key.to_string()))
+            )
+        ).map_err(|err|
             model::fs::FSError{
                 message: format!("failed to put_object at: {}, {}", key, err.to_string())
             }
@@ -51,11 +49,9 @@ impl adapters::adapter::ObjectAdapter for google_cloud_storage::client::Client {
                 ..Default::default()
             };
 
-            let lo = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    self.list_objects(&req).await
-                })
-            }).map_err(|err|
+            let lo = util::fs::poll_until_ready_error(
+                self.list_objects(&req)
+            ).map_err(|err|
                 model::fs::FSError{
                     message: format!("failed to list_objects at: {}, {}", prefix, err.to_string())
                 }
@@ -96,11 +92,9 @@ impl adapters::adapter::ObjectAdapter for google_cloud_storage::client::Client {
             ..Default::default()
         };
 
-        let o = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                self.get_object(&req).await
-            })
-        }).map_err(|err|
+        let o = util::fs::poll_until_ready_error(
+            self.get_object(&req)
+        ).map_err(|err|
             model::fs::FSError{
                 message: format!("failed to get_object: {}, {}", key, err.to_string())
             }
@@ -131,11 +125,9 @@ impl adapters::adapter::ObjectAdapter for google_cloud_storage::client::Client {
             ..Default::default()
         };
 
-        let bytes = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                self.download_object(&req, &Range::default()).await
-            })
-        }).map_err(|err|
+        let bytes = util::fs::poll_until_ready_error(
+            self.download_object(&req, &Range::default())
+        ).map_err(|err|
             model::fs::FSError{
                 message: format!("failed to get_object: {}, {}", key, err.to_string())
             }

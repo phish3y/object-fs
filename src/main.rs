@@ -6,13 +6,12 @@ use fuser::{
     Request
 };
 use std::{
-    collections::HashMap, 
-    sync::Mutex, 
-    time::{Duration, SystemTime}
+    collections::HashMap, sync::Mutex, time::{Duration, SystemTime}
 };
 
 mod adapters;
 mod model;
+mod util;
 
 const TTL: Duration = Duration::new(0, 0); 
 const ROOT_INO: u64 = 1;
@@ -475,49 +474,44 @@ impl Filesystem for ObjectFS<'_> {
             Ok(_) => {}
         }
         
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                let prefix = "";
-                let res = self.client
-                    .fs_list_objects(&self.bucket, prefix);
 
-                let objects = match res {
+        let prefix = "";
+        let res = self.client
+            .fs_list_objects(&self.bucket, prefix);
+
+        let objects = match res {
+            Err(err) => {
+                log::error!("`init` failed to list_objects at: {}", err);
+                return Err(-1);
+            }
+            Ok(objects) => objects
+        };
+
+        for obj in objects {
+            let key = if obj.key.ends_with('/') {
+                let key = format!("{}{}", obj.key, KEEP_FILE);
+                let res = self.client.fs_put_object(&self.bucket, &key);
+
+                match res {
                     Err(err) => {
-                        log::error!("`init` failed to list_objects at: {}", err);
+                        log::error!("`init` failed to put_object: {}", err);
                         return Err(-1);
                     }
-                    Ok(objects) => objects
+                    Ok(_) => ()
                 };
 
-                for obj in objects {
-                    let key = if obj.key.ends_with('/') {
-                        let key = format!("{}{}", obj.key, KEEP_FILE);
-                        let res = self.client.fs_put_object(&self.bucket, &key);
-    
-                        match res {
-                            Err(err) => {
-                                log::error!("`init` failed to put_object: {}", err);
-                                return Err(-1);
-                            }
-                            Ok(_) => ()
-                        };
-    
-                        key
-                    } else {
-                        obj.key
-                    };
+                key
+            } else {
+                obj.key
+            };
 
-                    self.index_object(&model::fs::FSObject {
-                        key,
-                        size: obj.size,
-                        modified_time: obj.modified_time
-                    });
-                }
-                
-                Ok(())
-            })
-        })?;
-        
+            self.index_object(&model::fs::FSObject {
+                key,
+                size: obj.size,
+                modified_time: obj.modified_time
+            });
+        }
+    
         return Ok(());
     }
 
@@ -1071,8 +1065,7 @@ impl Filesystem for ObjectFS<'_> {
     // }
 }
 
-#[::tokio::main]
-async fn main() {
+fn main() {
     let matches = Command::new("objectfs")
         .arg(
             Arg::new("MOUNT_POINT")
@@ -1088,7 +1081,7 @@ async fn main() {
     options.push(MountOption::AutoUnmount);
     options.push(MountOption::AllowRoot);    
 
-    let config = aws_config::load_from_env().await;
+    let config = util::fs::poll_until_ready(aws_config::load_from_env());
     let client = aws_sdk_s3::Client::new(&config);
 
     let fs = ObjectFS::new(&client, "fuse-tmp");
