@@ -29,7 +29,12 @@ impl adapters::adapter::ObjectAdapter for MockClient {
         }))
     }
 
-    fn fs_download_object(&self, _bucket: &str, _key: &str) -> Result<Vec<u8>, model::fs::FSError> {
+    fn fs_download_object(
+        &self,
+        _bucket: &str,
+        _key: &str,
+        _range: Option<(u64, u64)>,
+    ) -> Result<Vec<u8>, model::fs::FSError> {
         Ok(Vec::new())
     }
 }

@@ -106,8 +106,17 @@ impl adapters::adapter::ObjectAdapter for aws_sdk_s3::Client {
         }))
     }
 
-    fn fs_download_object(&self, bucket: &str, key: &str) -> Result<Vec<u8>, model::fs::FSError> {
-        let req = self.get_object().bucket(bucket).key(key);
+    fn fs_download_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        range: Option<(u64, u64)>,
+    ) -> Result<Vec<u8>, model::fs::FSError> {
+        let mut req = self.get_object().bucket(bucket).key(key);
+
+        if range.is_some() {
+            req = req.range(format!("bytes={}-{}", range.unwrap().0, range.unwrap().1));
+        }
 
         let o =
             util::poll::poll_until_ready_error(req.send()).map_err(|err| model::fs::FSError {

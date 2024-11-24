@@ -124,18 +124,28 @@ impl adapters::adapter::ObjectAdapter for google_cloud_storage::client::Client {
         }))
     }
 
-    fn fs_download_object(&self, bucket: &str, key: &str) -> Result<Vec<u8>, model::fs::FSError> {
+    fn fs_download_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        range: Option<(u64, u64)>,
+    ) -> Result<Vec<u8>, model::fs::FSError> {
         let req = GetObjectRequest {
             bucket: bucket.to_string(),
             object: key.to_string(),
             ..Default::default()
         };
 
-        let bytes =
-            util::poll::poll_until_ready_error(self.download_object(&req, &Range::default()))
-                .map_err(|err| model::fs::FSError {
-                    message: format!("failed to get_object: {}, {}", key, err.to_string()),
-                })?;
+        let range = if range.is_some() {
+            Range(Some(range.unwrap().0), Some(range.unwrap().1))
+        } else {
+            Range::default()
+        };
+
+        let bytes = util::poll::poll_until_ready_error(self.download_object(&req, &range))
+            .map_err(|err| model::fs::FSError {
+                message: format!("failed to get_object: {}, {}", key, err.to_string()),
+            })?;
 
         Ok(bytes)
     }

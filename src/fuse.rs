@@ -1,9 +1,18 @@
-use std::{ffi::OsStr, time::Duration};
+use std::{
+    ffi::OsStr,
+    time::{Duration, SystemTime},
+};
 
-use fuser::{Filesystem, ReplyEntry, Request};
-use libc::ENOENT;
+use fuser::{Filesystem, ReplyAttr, ReplyData, ReplyEntry, ReplyWrite, Request};
+use libc::{EIO, ENOENT};
 
-use crate::{fs::ObjectFS, model};
+use crate::{
+    fs::ObjectFS,
+    model::{
+        self,
+        fs::FSObject,
+    },
+};
 
 const TTL: Duration = Duration::new(0, 0);
 const KEEP_FILE: &str = ".keep";
@@ -73,15 +82,23 @@ impl Filesystem for ObjectFS {
             return;
         }
 
-        let lock_key_to_node = self
-            .key_to_node
-            .lock()
-            .expect("failed to acquire `key_to_node` guard");
+        let lock_key_to_node = match self.key_to_node.lock() {
+            Err(err) => {
+                log::error!("`lookup` failed to acquire `key_to_node` guard: {}", err);
+                reply.error(EIO);
+                return;
+            }
+            Ok(guard) => guard,
+        };
 
-        let lock_ino_to_node = self
-            .ino_to_node
-            .lock()
-            .expect("failed to acquire `ino_to_node` guard");
+        let lock_ino_to_node = match self.ino_to_node.lock() {
+            Err(err) => {
+                log::error!("`lookup` failed to acquire `ino_to_node` guard: {}", err);
+                reply.error(EIO);
+                return;
+            }
+            Ok(guard) => guard,
+        };
 
         let parent_node = match lock_ino_to_node.get(&parent) {
             None => {
@@ -106,388 +123,310 @@ impl Filesystem for ObjectFS {
         reply.entry(&TTL, &node.attr, 0);
     }
 
-    // fn getattr(
-    //     &mut self,
-    //     _req: &Request,
-    //     ino: u64,
-    //     fh: Option<u64>,
-    //     reply: ReplyAttr
-    // ) {
-    //     log::debug!("`getattr` ino: {}, fh: {}", ino, fh.unwrap_or(0));
+    fn getattr(&mut self, _req: &Request, ino: u64, fh: Option<u64>, reply: ReplyAttr) {
+        log::debug!("`getattr` ino: {}, fh: {}", ino, fh.unwrap_or(0));
 
-    //     if ino == ROOT_INO {
-    //         reply.attr(&TTL, &self.root_attr());
-    //         return;
-    //     }
+        if ino == self.get_root_attr().ino {
+            reply.attr(&TTL, &self.get_root_attr());
+            return;
+        }
 
-    //     let lock_ino_to_key = self.ino_to_key
-    //         .lock()
-    //         .unwrap(); // TODO
+        let lock_ino_to_node = match self.ino_to_node.lock() {
+            Err(err) => {
+                log::error!("`getattr` failed to acquire `ino_to_node` guard: {}", err);
+                reply.error(EIO);
+                return;
+            }
+            Ok(guard) => guard,
+        };
 
-    //     let mut lock_key_to_ino = self.key_to_ino
-    //         .lock()
-    //         .unwrap(); // TODO
+        let node = match lock_ino_to_node.get(&ino) {
+            None => {
+                log::error!("`getattr` failed to find ino: {}", ino);
+                reply.error(ENOENT);
+                return;
+            }
+            Some(pn) => pn,
+        };
 
-    //     if let Some(key) = lock_ino_to_key.get(&ino) {
-    //         let head_res = tokio::task::block_in_place(|| {
-    //             tokio::runtime::Handle::current().block_on(async {
-    //                 self.client.head_object()
-    //                     .bucket(&self.bucket)
-    //                     .key(key) // TODO only supports root
-    //                     .send()
-    //                     .await
-    //             })
-    //         });
+        reply.attr(&TTL, &node.attr);
+    }
 
-    //         let head = match head_res {
-    //             Err(err) => {
-    //                 if let Some(svc_err) = err.as_service_error() {
-    //                     if svc_err.is_not_found() {
-    //                         log::warn!("`getattr` not found: {}", &key);
-    //                         reply.error(ENOENT);
-    //                     } else {
-    //                         log::error!("`getattr` failed to head_object: {}", err);
-    //                         reply.error(EIO);
-    //                     }
-    //                 }
+    fn mknod(
+        &mut self,
+        _req: &Request,
+        parent: u64,
+        name: &OsStr,
+        mode: u32,
+        _umask: u32,
+        _rdev: u32,
+        reply: ReplyEntry,
+    ) {
+        log::debug!(
+            "`mknod` parent: {}, name: {:?}, mode: {}",
+            parent,
+            name,
+            mode
+        );
 
-    //                 return;
-    //             }
-    //             Ok(head) => head
-    //         };
+        if (mode & libc::S_IFMT) != libc::S_IFREG {
+            reply.error(libc::EOPNOTSUPP);
+            return;
+        }
 
-    //         let ino = if let Some(ino) = lock_key_to_ino.get(key) {
-    //             *ino
-    //         } else {
-    //             let next_ino = self.next_ino();
-    //             lock_key_to_ino.insert(key.clone(), next_ino);
+        let parent_node = {
+            let lock_ino_to_node = match self.ino_to_node.lock() {
+                Err(err) => {
+                    log::error!("`mknod` failed to acquire `ino_to_node` guard: {}", err);
+                    reply.error(EIO);
+                    return;
+                }
+                Ok(guard) => guard,
+            };
 
-    //             next_ino
-    //         };
+            match lock_ino_to_node.get(&parent) {
+                None => {
+                    log::error!("`mknod`failed to find parent ino: {}", parent);
+                    reply.error(ENOENT);
+                    return;
+                }
+                Some(pn) => pn,
+            }
+            .clone()
+        };
 
-    //         let size = head.content_length().unwrap() as u64; // TODO
-    //         let secs = head.last_modified
-    //             .unwrap() // TODO
-    //             .secs();
-    //         let nanos = head.last_modified
-    //             .unwrap() // TODO
-    //             .subsec_nanos();
-    //         let atime = SystemTime::UNIX_EPOCH + Duration::new(secs as u64, nanos);
+        let key = format!("{}{}", parent_node.key, name.to_string_lossy());
 
-    //         let fa = FileAttr {
-    //             ino,
-    //             size,
-    //             blksize: 0,
-    //             blocks: (size + 511) / 512,
-    //             atime,
-    //             mtime: SystemTime::now(),
-    //             ctime: SystemTime::now(),
-    //             crtime: SystemTime::now(),
-    //             kind: fuser::FileType::RegularFile,
-    //             perm: 0o755,
-    //             nlink: 2,
-    //             uid: 0,
-    //             gid: 0,
-    //             rdev: 0,
-    //             flags: 0,
-    //         };
+        match self.client.fs_put_object(&self.bucket, &key) {
+            Err(err) => {
+                log::error!("`mknod` failed to put_object: {}", err);
+                reply.error(EIO);
+                return;
+            }
+            Ok(_) => (),
+        }
 
-    //         reply.attr(&TTL, &fa);
-    //     } else {
-    //         // TODO
-    //         log::error!("`getattr` i should not yet be here");
-    //         reply.error(ENOENT);
-    //     }
-    // }
+        let new_node = self.index_file(
+            &FSObject {
+                key,
+                size: 0,
+                modified_time: SystemTime::now(),
+            },
+            parent,
+        );
 
-    // fn mknod(
-    //     &mut self,
-    //     _req: &Request,
-    //     parent: u64,
-    //     name: &OsStr,
-    //     mode: u32,
-    //     _umask: u32,
-    //     _rdev: u32,
-    //     reply: ReplyEntry,
-    // ) {
-    //     log::debug!("`mknod` parent: {}, name: {:?}, mode: {}", parent, name, mode);
+        reply.entry(&TTL, &new_node.attr, 0);
+    }
 
-    //     if (mode & libc::S_IFMT) != libc::S_IFREG { // TODO support link
-    //         reply.error(libc::EOPNOTSUPP);
-    //         return;
-    //     }
+    fn mkdir(
+        &mut self,
+        _req: &Request<'_>,
+        parent: u64,
+        name: &OsStr,
+        mode: u32,
+        umask: u32,
+        reply: ReplyEntry,
+    ) {
+        log::debug!(
+            "`mkdir` parent: {}, name: {:?}, mode: {}, umask: {}",
+            parent,
+            name,
+            mode,
+            umask
+        );
 
-    //     let mut lock_ino_to_key = self.ino_to_key
-    //         .lock()
-    //         .unwrap(); // TODO
+        let parent_node = {
+            let lock_ino_to_node = match self.ino_to_node.lock() {
+                Err(err) => {
+                    log::error!("`mkdir` failed to acquire `ino_to_node` guard: {}", err);
+                    reply.error(EIO);
+                    return;
+                }
+                Ok(guard) => guard,
+            };
 
-    //     let mut lock_key_to_ino = self.key_to_ino
-    //         .lock()
-    //         .unwrap(); // TODO
+            match lock_ino_to_node.get(&parent) {
+                None => {
+                    log::error!("`mkdir` failed to find parent ino: {}", parent);
+                    reply.error(ENOENT);
+                    return;
+                }
+                Some(pn) => pn,
+            }
+            .clone()
+        };
 
-    //     let key = match lock_ino_to_key.get(&parent) {
-    //         None => {
-    //             // TODO shouldn't ever get here right now
-    //             log::error!("`mknod` failed to find parent key for ino: {}", parent);
-    //             reply.error(ENOENT);
-    //             return;
-    //         }
-    //         Some(key) => key
-    //     };
+        let key = format!(
+            "{}{}/{}",
+            parent_node.key,
+            name.to_string_lossy(),
+            KEEP_FILE
+        );
 
-    //     let key = format!("{}{}", key, name.to_string_lossy()); // TODO only suppots root
+        match self.client.fs_put_object(&self.bucket, &key) {
+            Err(err) => {
+                log::error!("`mkdir` failed to put_object: {}", err);
+                reply.error(EIO);
+                return;
+            }
+            Ok(_) => (),
+        }
 
-    //     let put_res = tokio::task::block_in_place(|| {
-    //         tokio::runtime::Handle::current().block_on(async {
-    //             self.client.put_object()
-    //                 .bucket(&self.bucket)
-    //                 .key(&key)
-    //                 .send()
-    //                 .await
-    //         })
-    //     });
+        let new_node = self.index_directory(
+            &FSObject {
+                key,
+                size: 0,
+                modified_time: SystemTime::now(),
+            },
+            parent,
+        );
 
-    //     match put_res {
-    //         Err(err) => {
-    //             log::error!("`mknod` failed to put_object: {}", err);
-    //             reply.error(EIO);
-    //             return;
-    //         }
-    //         Ok(_) => {
-    //             let next_ino = self.next_ino();
-    //             let fa = FileAttr {
-    //                 ino: next_ino,
-    //                 size: 0,
-    //                 blksize: 0,
-    //                 blocks: 0,
-    //                 atime: SystemTime::now(),
-    //                 mtime: SystemTime::now(),
-    //                 ctime: SystemTime::now(),
-    //                 crtime: SystemTime::now(),
-    //                 kind: fuser::FileType::RegularFile,
-    //                 perm: 0o755,
-    //                 nlink: 2,
-    //                 uid: 0,
-    //                 gid: 0,
-    //                 rdev: 0,
-    //                 flags: 0,
-    //             };
+        reply.entry(&TTL, &new_node.attr, 0);
+    }
 
-    //             lock_ino_to_key.insert(next_ino, key.clone());
-    //             lock_key_to_ino.insert(key, next_ino);
+    fn read(
+        &mut self,
+        _req: &Request,
+        ino: u64,
+        fh: u64,
+        offset: i64,
+        size: u32,
+        _flags: i32,
+        _lock_owner: Option<u64>,
+        reply: ReplyData,
+    ) {
+        log::debug!(
+            "`read` ino: {}, fh: {}, offset: {}, size: {}",
+            ino,
+            fh,
+            offset,
+            size
+        );
 
-    //             reply.entry(&TTL, &fa, 0);
-    //         }
-    //     }
-    // }
+        let lock_ino_to_node = match self.ino_to_node.lock() {
+            Err(err) => {
+                log::error!("`read` failed to acquire `ino_to_node` guard: {}", err);
+                reply.error(EIO);
+                return;
+            }
+            Ok(guard) => guard,
+        };
 
-    // fn mkdir(
-    //     &mut self,
-    //     _req: &Request<'_>,
-    //     parent: u64,
-    //     name: &OsStr,
-    //     mode: u32,
-    //     umask: u32,
-    //     reply: ReplyEntry,
-    // ) {
-    //     log::debug!("`mkdir` parent: {}, name: {:?}, mode: {}, umask: {}", parent, name, mode, umask);
+        let node = match lock_ino_to_node.get(&ino) {
+            None => {
+                log::error!("`read` failed to find ino: {}", ino);
+                reply.error(ENOENT);
+                return;
+            }
+            Some(pn) => pn,
+        };
 
-    //     let mut lock_ino_to_key = self.ino_to_key
-    //         .lock()
-    //         .unwrap(); // TODO
+        let bytes = match self.client.fs_download_object(
+            &self.bucket,
+            &node.key,
+            Some((offset as u64, (offset as u64 + size as u64))),
+        ) {
+            Err(err) => {
+                log::error!("`read` failed to download_object: {}", err);
+                reply.error(EIO);
+                return;
+            }
+            Ok(b) => b,
+        };
 
-    //     let mut lock_key_to_ino = self.key_to_ino
-    //         .lock()
-    //         .unwrap(); // TODO
+        reply.data(&bytes)
+    }
 
-    //     let key = match lock_ino_to_key.get(&parent) {
-    //         Some(key) => key,
-    //         None => {
-    //             log::error!("`mkdir` no entry for ino: {}", parent);
-    //             reply.error(ENOENT);
-    //             return;
-    //         }
-    //     };
+    fn write(
+        &mut self,
+        _req: &Request<'_>,
+        ino: u64,
+        fh: u64,
+        offset: i64,
+        data: &[u8],
+        _write_flags: u32,
+        _flags: i32,
+        _lock_owner: Option<u64>,
+        reply: ReplyWrite,
+    ) {
+        log::debug!("`write` ino: {}, fh: {}, offset: {}, len: {}", ino, fh, offset, data.len());
 
-    //     let key = format!("{}{}/{}", key, name.to_string_lossy(), KEEP_FILE);
+        let lock_ino_to_node = match self.ino_to_node.lock() {
+            Err(err) => {
+                log::error!("`write` failed to acquire `ino_to_node` guard: {}", err);
+                reply.error(EIO);
+                return;
+            }
+            Ok(guard) => guard,
+        };
 
-    //     let put_res = tokio::task::block_in_place(|| {
-    //         tokio::runtime::Handle::current().block_on(async {
-    //             self.client.put_object()
-    //                 .bucket(&self.bucket)
-    //                 .key(&key)
-    //                 .send()
-    //                 .await
-    //         })
-    //     });
+        let node = match lock_ino_to_node.get(&ino) {
+            None => {
+                log::error!("`write` failed to find ino: {}", ino);
+                reply.error(ENOENT);
+                return;
+            }
+            Some(pn) => pn,
+        };
 
-    //     match put_res {
-    //         Err(err) => {
-    //             log::error!("`mkdir` failed to put_object: {}", err);
-    //             reply.error(EIO);
-    //             return;
-    //         }
-    //         Ok(_) => {
-    //             let next_ino = self.next_ino();
-    //             let fa = FileAttr {
-    //                 ino: next_ino,
-    //                 size: 0,
-    //                 blksize: 0,
-    //                 blocks: 0,
-    //                 atime: SystemTime::now(),
-    //                 mtime: SystemTime::now(),
-    //                 ctime: SystemTime::now(),
-    //                 crtime: SystemTime::now(),
-    //                 kind: fuser::FileType::RegularFile,
-    //                 perm: 0o755,
-    //                 nlink: 2,
-    //                 uid: 0,
-    //                 gid: 0,
-    //                 rdev: 0,
-    //                 flags: 0,
-    //             };
+        // let get_res = tokio::task::block_in_place(|| {
+        //     tokio::runtime::Handle::current().block_on(async {
+        //         self.client.get_object()
+        //             .bucket(&self.bucket)
+        //             .key(key)
+        //             .send()
+        //             .await
+        //     })
+        // });
 
-    //             lock_ino_to_key.insert(next_ino, key.clone());
-    //             lock_key_to_ino.insert(key, next_ino);
+        // let mut existing_data = match get_res {
+        //     Err(err) => {
+        //         if let Some(svc_err) = err.as_service_error() {
+        //             if !svc_err.is_no_such_key() {
+        //                 log::error!("`write` failed to get_object: {}", err);
+        //                 reply.error(EIO);
+        //                 return;
+        //             }
+        //         }
 
-    //             reply.entry(&TTL, &fa, 0);
-    //         }
-    //     }
-    // }
+        //         Vec::new()
+        //     }
+        //     Ok(get) => {
+        //         tokio::task::block_in_place(|| {
+        //             tokio::runtime::Handle::current().block_on(async {
+        //                 let body = get.body.collect().await;
+        //                 body.map_or_else(
+        //                     |err| {
+        //                         log::warn!("`write` failed to collect body: {}", err);
+        //                         Vec::new()
+        //                     },
+        //                     |data| data.to_vec()
+        //                 )
+        //             })
+        //         })
+        //     }
+        // };
 
-    // fn read(
-    //     &mut self,
-    //     _req: &Request,
-    //     ino: u64,
-    //     fh: u64,
-    //     offset: i64,
-    //     size: u32,
-    //     _flags: i32,
-    //     _lock_owner: Option<u64>,
-    //     reply: ReplyData,
-    // ) {
-    //     log::debug!("`read` ino: {}, fh: {}, offset: {}, size: {}", ino, fh, offset, size);
+        // let end_offset = offset as usize + data.len();
+        // if end_offset > existing_data.len() {
+        //     existing_data.resize(end_offset, 0);
+        // }
+        // existing_data[offset as usize..end_offset].copy_from_slice(data);
 
-    //     let lock_ino_to_key = self.ino_to_key
-    //         .lock()
-    //         .unwrap(); // TODO
+        // tokio::task::block_in_place(|| {
+        //     tokio::runtime::Handle::current().block_on(async {
+        //         self.client.put_object()
+        //             .bucket(&self.bucket)
+        //             .key(key)
+        //             .body(ByteStream::from(existing_data))
+        //             .send()
+        //             .await
+        //             .unwrap() // TODO
+        //     })
+        // });
 
-    //     let key = match lock_ino_to_key.get(&ino) {
-    //         Some(key) => key,
-    //         None => {
-    //             log::error!("`read` no entry for ino: {}", ino);
-    //             reply.error(ENOENT);
-    //             return;
-    //         }
-    //     };
-
-    //     let range = format!("bytes={}-{}", offset, offset + size as i64 - 1);
-
-    //     let buffer = tokio::task::block_in_place(|| {
-    //         tokio::runtime::Handle::current().block_on(async {
-    //             let get_res = self.client.get_object()
-    //                 .bucket(&self.bucket)
-    //                 .key(key)
-    //                 .range(&range)
-    //                 .send()
-    //                 .await
-    //                 .unwrap(); // TODO
-
-    //             get_res.body
-    //                 .collect()
-    //                 .await
-    //                 .unwrap() // TODO
-    //         })
-    //     });
-
-    //     reply.data(&buffer.into_bytes())
-    // }
-
-    // fn write(
-    //     &mut self,
-    //     _req: &Request<'_>,
-    //     ino: u64,
-    //     fh: u64,
-    //     offset: i64,
-    //     data: &[u8],
-    //     _write_flags: u32,
-    //     _flags: i32,
-    //     _lock_owner: Option<u64>,
-    //     reply: ReplyWrite,
-    // ) {
-    //     log::debug!("`write` ino: {}, fh: {}, offset: {}, len: {}", ino, fh, offset, data.len());
-
-    //     let lock_ino_to_key = self.ino_to_key
-    //         .lock()
-    //         .unwrap(); // TODO
-
-    //     let key = match lock_ino_to_key.get(&ino) {
-    //         None => {
-    //             log::error!("`write` no entry for ino: {}", ino);
-    //             reply.error(ENOENT);
-    //             return;
-    //         }
-    //         Some(key) => key
-    //     };
-
-    //     let get_res = tokio::task::block_in_place(|| {
-    //         tokio::runtime::Handle::current().block_on(async {
-    //             self.client.get_object()
-    //                 .bucket(&self.bucket)
-    //                 .key(key)
-    //                 .send()
-    //                 .await
-    //         })
-    //     });
-
-    //     let mut existing_data = match get_res {
-    //         Err(err) => {
-    //             if let Some(svc_err) = err.as_service_error() {
-    //                 if !svc_err.is_no_such_key() {
-    //                     log::error!("`write` failed to get_object: {}", err);
-    //                     reply.error(EIO);
-    //                     return;
-    //                 }
-    //             }
-
-    //             Vec::new()
-    //         }
-    //         Ok(get) => {
-    //             tokio::task::block_in_place(|| {
-    //                 tokio::runtime::Handle::current().block_on(async {
-    //                     let body = get.body.collect().await;
-    //                     body.map_or_else(
-    //                         |err| {
-    //                             log::warn!("`write` failed to collect body: {}", err);
-    //                             Vec::new()
-    //                         },
-    //                         |data| data.to_vec()
-    //                     )
-    //                 })
-    //             })
-    //         }
-    //     };
-
-    //     let end_offset = offset as usize + data.len();
-    //     if end_offset > existing_data.len() {
-    //         existing_data.resize(end_offset, 0);
-    //     }
-    //     existing_data[offset as usize..end_offset].copy_from_slice(data);
-
-    //     tokio::task::block_in_place(|| {
-    //         tokio::runtime::Handle::current().block_on(async {
-    //             self.client.put_object()
-    //                 .bucket(&self.bucket)
-    //                 .key(key)
-    //                 .body(ByteStream::from(existing_data))
-    //                 .send()
-    //                 .await
-    //                 .unwrap() // TODO
-    //         })
-    //     });
-
-    //     reply.written(data.len() as u32);
-    // }
+        // reply.written(data.len() as u32);
+    }
 
     // fn readdir(
     //     &mut self,

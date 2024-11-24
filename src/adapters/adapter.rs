@@ -15,5 +15,10 @@ pub trait ObjectAdapter {
         key: &str,
     ) -> Result<Option<model::fs::FSObject>, model::fs::FSError>;
 
-    fn fs_download_object(&self, bucket: &str, key: &str) -> Result<Vec<u8>, model::fs::FSError>;
+    fn fs_download_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        range: Option<(u64, u64)>,
+    ) -> Result<Vec<u8>, model::fs::FSError>;
 }

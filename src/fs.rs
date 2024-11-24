@@ -53,7 +53,7 @@ impl ObjectFS {
         }
     }
 
-    fn next_ino(&self) -> u64 {
+    pub fn next_ino(&self) -> u64 {
         let mut cur_ino = self
             .current_ino
             .lock()
@@ -84,6 +84,8 @@ impl ObjectFS {
                     },
                     parent_ino,
                 )
+                .attr
+                .ino
             } else {
                 self.index_directory(
                     &model::fs::FSObject {
@@ -93,11 +95,13 @@ impl ObjectFS {
                     },
                     parent_ino,
                 )
+                .attr
+                .ino
             }
         }
     }
 
-    fn index_file(&self, object: &model::fs::FSObject, parent: u64) -> u64 {
+    pub fn index_file(&self, object: &model::fs::FSObject, parent: u64) -> model::fs::FSNode {
         if self
             .key_to_node
             .lock()
@@ -111,8 +115,7 @@ impl ObjectFS {
                 .expect("failed to acquire `key_to_node` guard")
                 .get(&object.key)
                 .unwrap()
-                .attr
-                .ino;
+                .clone();
         }
 
         let ino = self.next_ino();
@@ -146,12 +149,12 @@ impl ObjectFS {
         self.key_to_node
             .lock()
             .expect("failed to acquire `key_to_node` guard")
-            .insert(object.key.clone(), node);
+            .insert(object.key.clone(), node.clone());
 
-        return ino;
+        return node;
     }
 
-    fn index_directory(&self, object: &model::fs::FSObject, parent: u64) -> u64 {
+    pub fn index_directory(&self, object: &model::fs::FSObject, parent: u64) -> model::fs::FSNode {
         let key = if object.key.ends_with('/') {
             &object.key[..object.key.len() - 1]
         } else {
@@ -171,8 +174,7 @@ impl ObjectFS {
                 .expect("failed to acquire `key_to_node` guard")
                 .get(key)
                 .unwrap()
-                .attr
-                .ino;
+                .clone();
         }
 
         let ino = self.next_ino();
@@ -206,12 +208,12 @@ impl ObjectFS {
         self.key_to_node
             .lock()
             .expect("failed to acquire `key_to_node` lock")
-            .insert(object.key.clone(), node);
+            .insert(object.key.clone(), node.clone());
 
-        return ino;
+        return node;
     }
 
-    fn get_parent(&self, path: &str) -> Option<String> {
+    pub fn get_parent(&self, path: &str) -> Option<String> {
         let path = if path.ends_with('/') {
             &path[..path.len() - 1]
         } else {
@@ -228,7 +230,7 @@ impl ObjectFS {
         self.ino_to_node
             .lock()
             .expect("failed to acquire `ino_to_node` guard")
-            .get(&0)
+            .get(&1)
             .expect("no root file attribute found")
             .attr
     }
@@ -290,7 +292,7 @@ mod tests {
         for (key, size, modified_time, parent) in cases {
             let fs = ObjectFS::new(Box::new(adapters::mock::MockClient {}), "dummy-bucket");
 
-            let ino = fs.index_file(
+            let node = fs.index_file(
                 &model::fs::FSObject {
                     key: key.to_string(),
                     size,
@@ -302,7 +304,7 @@ mod tests {
             let guard = fs.ino_to_node.lock().unwrap();
             let result = guard.get(&2).unwrap();
 
-            assert_eq!(ino, 2, "failed on `ino` for case: {}", key);
+            assert_eq!(node.attr.ino, 2, "failed on `ino` for case: {}", key);
             assert_eq!(result.attr.ino, 2, "failed on `attr.ino` for case: {}", key);
             assert_eq!(
                 result.parent, parent,
@@ -334,7 +336,7 @@ mod tests {
         for (key, modified_time, parent) in cases {
             let fs = ObjectFS::new(Box::new(adapters::mock::MockClient {}), "dummy-bucket");
 
-            let ino = fs.index_directory(
+            let node = fs.index_directory(
                 &model::fs::FSObject {
                     key: key.to_string(),
                     size: 0,
@@ -346,7 +348,7 @@ mod tests {
             let guard = fs.ino_to_node.lock().unwrap();
             let result = guard.get(&2).unwrap();
 
-            assert_eq!(ino, 2, "failed on `ino` for case: {}", key);
+            assert_eq!(node.attr.ino, 2, "failed on `ino` for case: {}", key);
             assert_eq!(result.attr.ino, 2, "failed on `attr.ino` for case: {}", key);
             assert_eq!(
                 result.parent, parent,
