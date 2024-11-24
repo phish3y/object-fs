@@ -2,22 +2,17 @@ use std::time::SystemTime;
 
 use crate::{adapters, model};
 
-pub struct MockS3Client{}
+pub struct MockClient {}
 
-impl adapters::adapter::ObjectAdapter for MockS3Client {
-
-    fn fs_put_object(
-        &self, 
-        _bucket: &str, 
-        _key: &str
-    ) -> Result<(), model::fs::FSError> {
+impl adapters::adapter::ObjectAdapter for MockClient {
+    fn fs_put_object(&self, _bucket: &str, _key: &str) -> Result<(), model::fs::FSError> {
         Ok(())
     }
 
     fn fs_list_objects(
         &self,
         _bucket: &str,
-        _prefix: &str
+        _prefix: &str,
     ) -> Result<Vec<model::fs::FSObject>, model::fs::FSError> {
         Ok(Vec::new())
     }
@@ -25,20 +20,16 @@ impl adapters::adapter::ObjectAdapter for MockS3Client {
     fn fs_head_object(
         &self,
         _bucket: &str,
-        key: &str
-    ) -> Result<model::fs::FSObject, model::fs::FSError> {
-        Ok(model::fs::FSObject{
+        key: &str,
+    ) -> Result<Option<model::fs::FSObject>, model::fs::FSError> {
+        Ok(Some(model::fs::FSObject {
             key: key.to_string(),
             size: 0,
-            modified_time: SystemTime::now()
-        })
+            modified_time: SystemTime::now(),
+        }))
     }
 
-    fn fs_download_object(
-        &self,
-        _bucket: &str,
-        _key: &str
-    ) -> Result<Vec<u8>, model::fs::FSError> {
+    fn fs_download_object(&self, _bucket: &str, _key: &str) -> Result<Vec<u8>, model::fs::FSError> {
         Ok(Vec::new())
     }
 }

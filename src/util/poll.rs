@@ -1,4 +1,9 @@
-use std::{future::Future, task::{Context, Poll}, thread, time::Duration};
+use std::{
+    future::Future,
+    task::{Context, Poll},
+    thread,
+    time::Duration,
+};
 
 use futures::task::noop_waker_ref;
 
@@ -6,7 +11,7 @@ pub fn poll_until_ready_error<Fut, T, E>(future: Fut) -> Result<T, E>
 where
     Fut: Future<Output = Result<T, E>>,
 {
-    let mut future = Box::pin(future); 
+    let mut future = Box::pin(future);
     let mut context = Context::from_waker(noop_waker_ref());
 
     loop {
@@ -25,7 +30,7 @@ pub fn poll_until_ready<Fut, T>(future: Fut) -> T
 where
     Fut: Future<Output = T>,
 {
-    let mut future = Box::pin(future); 
+    let mut future = Box::pin(future);
     let mut context = Context::from_waker(noop_waker_ref());
 
     loop {

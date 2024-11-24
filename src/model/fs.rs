@@ -13,7 +13,7 @@ pub struct FSObject {
 
 #[derive(Debug)]
 pub struct FSError {
-    pub message: String
+    pub message: String,
 }
 
 impl core::fmt::Display for FSError {
