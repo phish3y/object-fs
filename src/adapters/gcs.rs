@@ -10,15 +10,26 @@ use google_cloud_storage::http::objects::{
 use crate::{adapters, model, util};
 
 impl adapters::adapter::ObjectAdapter for google_cloud_storage::client::Client {
-    fn fs_put_object(&self, bucket: &str, key: &str) -> Result<(), model::fs::FSError> {
+    fn fs_put_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        body: Option<Vec<u8>>,
+    ) -> Result<(), model::fs::FSError> {
         let req = UploadObjectRequest {
             bucket: bucket.to_string(),
             ..Default::default()
         };
 
+        let body = if body.is_some() {
+            body.unwrap()
+        } else {
+            vec![]
+        };
+
         util::poll::poll_until_ready_error(self.upload_object(
             &req,
-            "".as_bytes(),
+            body,
             &UploadType::Simple(Media::new(key.to_string())),
         ))
         .map_err(|err| model::fs::FSError {
@@ -129,7 +140,7 @@ impl adapters::adapter::ObjectAdapter for google_cloud_storage::client::Client {
         bucket: &str,
         key: &str,
         range: Option<(u64, u64)>,
-    ) -> Result<Vec<u8>, model::fs::FSError> {
+    ) -> Result<Option<Vec<u8>>, model::fs::FSError> {
         let req = GetObjectRequest {
             bucket: bucket.to_string(),
             object: key.to_string(),
@@ -142,11 +153,24 @@ impl adapters::adapter::ObjectAdapter for google_cloud_storage::client::Client {
             Range::default()
         };
 
-        let bytes = util::poll::poll_until_ready_error(self.download_object(&req, &range))
-            .map_err(|err| model::fs::FSError {
-                message: format!("failed to get_object: {}, {}", key, err.to_string()),
-            })?;
+        let bytes = match util::poll::poll_until_ready_error(self.download_object(&req, &range)) {
+            Err(google_cloud_storage::http::Error::Response(err)) => {
+                if err.code == 404 {
+                    return Ok(None);
+                }
 
-        Ok(bytes)
+                return Err(model::fs::FSError {
+                    message: format!("failed to download_object: {}, {}", key, err.to_string()),
+                });
+            }
+            Err(err) => {
+                return Err(model::fs::FSError {
+                    message: format!("failed to download_object: {}, {}", key, err.to_string()),
+                });
+            }
+            Ok(bytes) => bytes,
+        };
+
+        Ok(Some(bytes))
     }
 }

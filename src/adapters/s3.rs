@@ -1,10 +1,21 @@
 use std::time::{Duration, SystemTime};
 
+use aws_sdk_s3::primitives::ByteStream;
+
 use crate::{adapters, model, util};
 
 impl adapters::adapter::ObjectAdapter for aws_sdk_s3::Client {
-    fn fs_put_object(&self, bucket: &str, key: &str) -> Result<(), model::fs::FSError> {
-        let req = self.put_object().bucket(bucket).key(key);
+    fn fs_put_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        body: Option<Vec<u8>>,
+    ) -> Result<(), model::fs::FSError> {
+        let mut req = self.put_object().bucket(bucket).key(key);
+
+        if body.is_some() {
+            req = req.body(ByteStream::from(body.unwrap()));
+        }
 
         util::poll::poll_until_ready_error(req.send()).map_err(|err| model::fs::FSError {
             message: format!("failed to put_object at: {}, {}", key, err.to_string()),
@@ -111,17 +122,27 @@ impl adapters::adapter::ObjectAdapter for aws_sdk_s3::Client {
         bucket: &str,
         key: &str,
         range: Option<(u64, u64)>,
-    ) -> Result<Vec<u8>, model::fs::FSError> {
+    ) -> Result<Option<Vec<u8>>, model::fs::FSError> {
         let mut req = self.get_object().bucket(bucket).key(key);
 
         if range.is_some() {
             req = req.range(format!("bytes={}-{}", range.unwrap().0, range.unwrap().1));
         }
 
-        let o =
-            util::poll::poll_until_ready_error(req.send()).map_err(|err| model::fs::FSError {
-                message: format!("failed to get_object: {}, {}", key, err.to_string()),
-            })?;
+        let o = match util::poll::poll_until_ready_error(req.send()) {
+            Err(err) => {
+                if let Some(svc_err) = err.as_service_error() {
+                    if svc_err.is_no_such_key() {
+                        return Ok(None);
+                    }
+                }
+
+                return Err(model::fs::FSError {
+                    message: format!("failed to get_object: {}, {}", key, err.to_string()),
+                });
+            }
+            Ok(o) => o,
+        };
 
         let bytes = util::poll::poll_until_ready_error(o.body.collect()).map_err(|err| {
             model::fs::FSError {
@@ -129,6 +150,6 @@ impl adapters::adapter::ObjectAdapter for aws_sdk_s3::Client {
             }
         })?;
 
-        Ok(bytes.into_bytes().to_vec())
+        Ok(Some(bytes.into_bytes().to_vec()))
     }
 }

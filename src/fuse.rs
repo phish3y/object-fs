@@ -8,10 +8,7 @@ use libc::{EIO, ENOENT};
 
 use crate::{
     fs::ObjectFS,
-    model::{
-        self,
-        fs::FSObject,
-    },
+    model::{self, fs::FSObject},
 };
 
 const TTL: Duration = Duration::new(0, 0);
@@ -25,7 +22,7 @@ impl Filesystem for ObjectFS {
     ) -> Result<(), libc::c_int> {
         log::info!("`init` called");
 
-        let res = self.client.fs_put_object(&self.bucket, KEEP_FILE);
+        let res = self.client.fs_put_object(&self.bucket, KEEP_FILE, None);
 
         match res {
             Err(err) => {
@@ -49,7 +46,7 @@ impl Filesystem for ObjectFS {
         for obj in objects {
             let key = if obj.key.ends_with('/') {
                 let key = format!("{}{}", obj.key, KEEP_FILE);
-                let res = self.client.fs_put_object(&self.bucket, &key);
+                let res = self.client.fs_put_object(&self.bucket, &key, None);
 
                 match res {
                     Err(err) => {
@@ -197,7 +194,7 @@ impl Filesystem for ObjectFS {
 
         let key = format!("{}{}", parent_node.key, name.to_string_lossy());
 
-        match self.client.fs_put_object(&self.bucket, &key) {
+        match self.client.fs_put_object(&self.bucket, &key, None) {
             Err(err) => {
                 log::error!("`mknod` failed to put_object: {}", err);
                 reply.error(EIO);
@@ -263,7 +260,7 @@ impl Filesystem for ObjectFS {
             KEEP_FILE
         );
 
-        match self.client.fs_put_object(&self.bucket, &key) {
+        match self.client.fs_put_object(&self.bucket, &key, None) {
             Err(err) => {
                 log::error!("`mkdir` failed to put_object: {}", err);
                 reply.error(EIO);
@@ -321,7 +318,7 @@ impl Filesystem for ObjectFS {
             Some(pn) => pn,
         };
 
-        let bytes = match self.client.fs_download_object(
+        let maybe_bytes = match self.client.fs_download_object(
             &self.bucket,
             &node.key,
             Some((offset as u64, (offset as u64 + size as u64))),
@@ -331,7 +328,16 @@ impl Filesystem for ObjectFS {
                 reply.error(EIO);
                 return;
             }
-            Ok(b) => b,
+            Ok(mb) => mb,
+        };
+
+        let bytes = match maybe_bytes {
+            None => {
+                log::warn!("`write` object not found: {}", node.key);
+                reply.error(ENOENT);
+                return;
+            }
+            Some(b) => b,
         };
 
         reply.data(&bytes)
@@ -349,7 +355,13 @@ impl Filesystem for ObjectFS {
         _lock_owner: Option<u64>,
         reply: ReplyWrite,
     ) {
-        log::debug!("`write` ino: {}, fh: {}, offset: {}, len: {}", ino, fh, offset, data.len());
+        log::debug!(
+            "`write` ino: {}, fh: {}, offset: {}, len: {}",
+            ino,
+            fh,
+            offset,
+            data.len()
+        );
 
         let lock_ino_to_node = match self.ino_to_node.lock() {
             Err(err) => {
@@ -369,63 +381,46 @@ impl Filesystem for ObjectFS {
             Some(pn) => pn,
         };
 
-        // let get_res = tokio::task::block_in_place(|| {
-        //     tokio::runtime::Handle::current().block_on(async {
-        //         self.client.get_object()
-        //             .bucket(&self.bucket)
-        //             .key(key)
-        //             .send()
-        //             .await
-        //     })
-        // });
+        let maybe_bytes = match self
+            .client
+            .fs_download_object(&self.bucket, &node.key, None)
+        {
+            Err(err) => {
+                log::error!("`write` failed to download_object: {}", err);
+                reply.error(EIO);
+                return;
+            }
+            Ok(mb) => mb,
+        };
 
-        // let mut existing_data = match get_res {
-        //     Err(err) => {
-        //         if let Some(svc_err) = err.as_service_error() {
-        //             if !svc_err.is_no_such_key() {
-        //                 log::error!("`write` failed to get_object: {}", err);
-        //                 reply.error(EIO);
-        //                 return;
-        //             }
-        //         }
+        let mut bytes = match maybe_bytes {
+            None => {
+                log::warn!("`write` object not found: {}", node.key);
+                reply.error(ENOENT);
+                return;
+            }
+            Some(b) => b,
+        };
 
-        //         Vec::new()
-        //     }
-        //     Ok(get) => {
-        //         tokio::task::block_in_place(|| {
-        //             tokio::runtime::Handle::current().block_on(async {
-        //                 let body = get.body.collect().await;
-        //                 body.map_or_else(
-        //                     |err| {
-        //                         log::warn!("`write` failed to collect body: {}", err);
-        //                         Vec::new()
-        //                     },
-        //                     |data| data.to_vec()
-        //                 )
-        //             })
-        //         })
-        //     }
-        // };
+        let end_offset = offset as usize + data.len();
+        if end_offset > bytes.len() {
+            bytes.resize(end_offset, 0);
+        }
+        bytes[offset as usize..end_offset].copy_from_slice(data);
 
-        // let end_offset = offset as usize + data.len();
-        // if end_offset > existing_data.len() {
-        //     existing_data.resize(end_offset, 0);
-        // }
-        // existing_data[offset as usize..end_offset].copy_from_slice(data);
+        match self
+            .client
+            .fs_put_object(&self.bucket, &node.key, Some(bytes))
+        {
+            Err(err) => {
+                log::error!("`write` failed to put_object: {}", err);
+                reply.error(EIO);
+                return;
+            }
+            Ok(_) => (),
+        }
 
-        // tokio::task::block_in_place(|| {
-        //     tokio::runtime::Handle::current().block_on(async {
-        //         self.client.put_object()
-        //             .bucket(&self.bucket)
-        //             .key(key)
-        //             .body(ByteStream::from(existing_data))
-        //             .send()
-        //             .await
-        //             .unwrap() // TODO
-        //     })
-        // });
-
-        // reply.written(data.len() as u32);
+        reply.written(data.len() as u32);
     }
 
     // fn readdir(

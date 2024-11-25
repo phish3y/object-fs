@@ -5,7 +5,12 @@ use crate::{adapters, model};
 pub struct MockClient {}
 
 impl adapters::adapter::ObjectAdapter for MockClient {
-    fn fs_put_object(&self, _bucket: &str, _key: &str) -> Result<(), model::fs::FSError> {
+    fn fs_put_object(
+        &self,
+        _bucket: &str,
+        _key: &str,
+        _body: Option<Vec<u8>>,
+    ) -> Result<(), model::fs::FSError> {
         Ok(())
     }
 
@@ -34,7 +39,7 @@ impl adapters::adapter::ObjectAdapter for MockClient {
         _bucket: &str,
         _key: &str,
         _range: Option<(u64, u64)>,
-    ) -> Result<Vec<u8>, model::fs::FSError> {
-        Ok(Vec::new())
+    ) -> Result<Option<Vec<u8>>, model::fs::FSError> {
+        Ok(Some(Vec::new()))
     }
 }

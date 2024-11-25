@@ -1,7 +1,12 @@
 use crate::model;
 
 pub trait ObjectAdapter {
-    fn fs_put_object(&self, bucket: &str, key: &str) -> Result<(), model::fs::FSError>;
+    fn fs_put_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        body: Option<Vec<u8>>,
+    ) -> Result<(), model::fs::FSError>;
 
     fn fs_list_objects(
         &self,
@@ -20,5 +25,5 @@ pub trait ObjectAdapter {
         bucket: &str,
         key: &str,
         range: Option<(u64, u64)>,
-    ) -> Result<Vec<u8>, model::fs::FSError>;
+    ) -> Result<Option<Vec<u8>>, model::fs::FSError>;
 }
