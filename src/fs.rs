@@ -4,7 +4,7 @@ use fuser::FileAttr;
 
 use crate::{adapters, model};
 
-const ROOT_INO: u64 = 1;
+pub const ROOT_INO: u64 = 1;
 
 pub struct ObjectFS {
     pub client: Box<dyn adapters::adapter::ObjectAdapter>,
@@ -63,7 +63,12 @@ impl ObjectFS {
         return *cur_ino;
     }
 
-    pub fn index_object(&self, object: &model::fs::FSObject) {
+    pub fn index_object(
+        &self,
+        ino_to_node: &mut HashMap<u64, model::fs::FSNode>,
+        key_to_node: &mut HashMap<String, model::fs::FSNode>,
+        object: &model::fs::FSObject,
+    ) {
         let mut components = Vec::new();
         let mut maybe_component = Some(object.key.clone());
         while let Some(component) = maybe_component {
@@ -77,6 +82,8 @@ impl ObjectFS {
         for component in components {
             parent_ino = if component == object.key {
                 self.index_file(
+                    ino_to_node,
+                    key_to_node,
                     &model::fs::FSObject {
                         key: component,
                         size: object.size,
@@ -88,6 +95,8 @@ impl ObjectFS {
                 .ino
             } else {
                 self.index_directory(
+                    ino_to_node,
+                    key_to_node,
                     &model::fs::FSObject {
                         key: component,
                         size: object.size,
@@ -101,21 +110,15 @@ impl ObjectFS {
         }
     }
 
-    pub fn index_file(&self, object: &model::fs::FSObject, parent: u64) -> model::fs::FSNode {
-        if self
-            .key_to_node
-            .lock()
-            .expect("failed to acquire `key_to_node` guard")
-            .get(&object.key)
-            .is_some()
-        {
-            return self
-                .key_to_node
-                .lock()
-                .expect("failed to acquire `key_to_node` guard")
-                .get(&object.key)
-                .unwrap()
-                .clone();
+    pub fn index_file(
+        &self,
+        ino_to_node: &mut HashMap<u64, model::fs::FSNode>,
+        key_to_node: &mut HashMap<String, model::fs::FSNode>,
+        object: &model::fs::FSObject,
+        parent: u64,
+    ) -> model::fs::FSNode {
+        if key_to_node.get(&object.key).is_some() {
+            return key_to_node.get(&object.key).unwrap().clone();
         }
 
         let ino = self.next_ino();
@@ -141,40 +144,27 @@ impl ObjectFS {
             parent,
         };
 
-        self.ino_to_node
-            .lock()
-            .expect("failed to acquire `ino_to_node` guard")
-            .insert(ino, node.clone());
-
-        self.key_to_node
-            .lock()
-            .expect("failed to acquire `key_to_node` guard")
-            .insert(object.key.clone(), node.clone());
+        ino_to_node.insert(ino, node.clone());
+        key_to_node.insert(object.key.clone(), node.clone());
 
         return node;
     }
 
-    pub fn index_directory(&self, object: &model::fs::FSObject, parent: u64) -> model::fs::FSNode {
+    pub fn index_directory(
+        &self,
+        ino_to_node: &mut HashMap<u64, model::fs::FSNode>,
+        key_to_node: &mut HashMap<String, model::fs::FSNode>,
+        object: &model::fs::FSObject,
+        parent: u64,
+    ) -> model::fs::FSNode {
         let key = if object.key.ends_with('/') {
             &object.key[..object.key.len() - 1]
         } else {
             &object.key
         };
 
-        if self
-            .key_to_node
-            .lock()
-            .expect("failed to acquire `key_to_node` guard")
-            .get(key)
-            .is_some()
-        {
-            return self
-                .key_to_node
-                .lock()
-                .expect("failed to acquire `key_to_node` guard")
-                .get(key)
-                .unwrap()
-                .clone();
+        if key_to_node.get(key).is_some() {
+            return key_to_node.get(key).unwrap().clone();
         }
 
         let ino = self.next_ino();
@@ -200,17 +190,25 @@ impl ObjectFS {
             parent,
         };
 
-        self.ino_to_node
-            .lock()
-            .expect("failed to acquire `ino_to_node` lock")
-            .insert(ino, node.clone());
-
-        self.key_to_node
-            .lock()
-            .expect("failed to acquire `key_to_node` lock")
-            .insert(object.key.clone(), node.clone());
+        ino_to_node.insert(ino, node.clone());
+        key_to_node.insert(object.key.clone(), node.clone());
 
         return node;
+    }
+
+    pub fn get_children(
+        &self,
+        ino_to_node: &HashMap<u64, model::fs::FSNode>,
+        parent_ino: u64,
+    ) -> Vec<model::fs::FSNode> {
+        let mut children = Vec::new();
+        for node in ino_to_node.values() {
+            if node.parent == parent_ino {
+                children.push(node.clone());
+            }
+        }
+
+        return children;
     }
 
     pub fn get_parent(&self, path: &str) -> Option<String> {
@@ -226,10 +224,8 @@ impl ObjectFS {
         }
     }
 
-    pub fn get_root_attr(&self) -> FileAttr {
-        self.ino_to_node
-            .lock()
-            .expect("failed to acquire `ino_to_node` guard")
+    pub fn get_root_attr(&self, ino_to_node: &HashMap<u64, model::fs::FSNode>) -> FileAttr {
+        ino_to_node
             .get(&1)
             .expect("no root file attribute found")
             .attr
@@ -264,18 +260,30 @@ mod tests {
             ("folder/subfolder/file", 5, SystemTime::now(), 6),
         ];
 
+        let mut lock_ino_to_node = fs.ino_to_node.lock().unwrap();
+        let mut lock_key_to_node = fs.key_to_node.lock().unwrap();
         for (key, size, modified_time, expected_count) in cases {
-            fs.index_object(&model::fs::FSObject {
-                key: key.to_string(),
-                size,
-                modified_time,
-            });
-            let result = fs.key_to_node.lock().unwrap();
+            fs.index_object(
+                &mut lock_ino_to_node,
+                &mut lock_key_to_node,
+                &model::fs::FSObject {
+                    key: key.to_string(),
+                    size,
+                    modified_time,
+                },
+            );
 
             assert_eq!(
-                result.keys().len(),
+                lock_ino_to_node.keys().len(),
                 expected_count,
-                "failed index count for case: {}",
+                "failed ino index count for case: {}",
+                key
+            );
+
+            assert_eq!(
+                lock_key_to_node.keys().len(),
+                expected_count,
+                "failed key index count for case: {}",
                 key
             );
         }
@@ -292,7 +300,12 @@ mod tests {
         for (key, size, modified_time, parent) in cases {
             let fs = ObjectFS::new(Box::new(adapters::mock::MockClient {}), "dummy-bucket");
 
+            let mut lock_ino_to_node = fs.ino_to_node.lock().unwrap();
+            let mut lock_key_to_node = fs.key_to_node.lock().unwrap();
+
             let node = fs.index_file(
+                &mut lock_ino_to_node,
+                &mut lock_key_to_node,
                 &model::fs::FSObject {
                     key: key.to_string(),
                     size,
@@ -301,8 +314,7 @@ mod tests {
                 parent,
             );
 
-            let guard = fs.ino_to_node.lock().unwrap();
-            let result = guard.get(&2).unwrap();
+            let result = lock_ino_to_node.get(&2).unwrap();
 
             assert_eq!(node.attr.ino, 2, "failed on `ino` for case: {}", key);
             assert_eq!(result.attr.ino, 2, "failed on `attr.ino` for case: {}", key);
@@ -336,7 +348,12 @@ mod tests {
         for (key, modified_time, parent) in cases {
             let fs = ObjectFS::new(Box::new(adapters::mock::MockClient {}), "dummy-bucket");
 
+            let mut lock_ino_to_node = fs.ino_to_node.lock().unwrap();
+            let mut lock_key_to_node = fs.key_to_node.lock().unwrap();
+
             let node = fs.index_directory(
+                &mut lock_ino_to_node,
+                &mut lock_key_to_node,
                 &model::fs::FSObject {
                     key: key.to_string(),
                     size: 0,
@@ -345,8 +362,7 @@ mod tests {
                 parent,
             );
 
-            let guard = fs.ino_to_node.lock().unwrap();
-            let result = guard.get(&2).unwrap();
+            let result = lock_ino_to_node.get(&2).unwrap();
 
             assert_eq!(node.attr.ino, 2, "failed on `ino` for case: {}", key);
             assert_eq!(result.attr.ino, 2, "failed on `attr.ino` for case: {}", key);
@@ -362,6 +378,91 @@ mod tests {
                 key
             );
         }
+    }
+
+    #[test]
+    fn test_get_children() {
+        let client = adapters::mock::MockClient {};
+        let fs = ObjectFS::new(Box::new(client), "dummy-bucket");
+
+        let mut ino_to_node = fs.ino_to_node.lock().unwrap();
+
+        assert_eq!(fs.get_children(&ino_to_node, 1).len(), 0);
+
+        ino_to_node.insert(
+            2,
+            model::fs::FSNode {
+                attr: FileAttr {
+                    ino: 2,
+                    size: 0,
+                    blksize: 0,
+                    blocks: 0,
+                    atime: SystemTime::now(),
+                    mtime: SystemTime::now(),
+                    ctime: SystemTime::now(),
+                    crtime: SystemTime::now(),
+                    kind: fuser::FileType::Directory,
+                    perm: 0o755,
+                    nlink: 1,
+                    uid: 0,
+                    gid: 0,
+                    rdev: 0,
+                    flags: 0,
+                },
+                key: "".to_string(),
+                parent: 1,
+            },
+        );
+        ino_to_node.insert(
+            3,
+            model::fs::FSNode {
+                attr: FileAttr {
+                    ino: 3,
+                    size: 0,
+                    blksize: 0,
+                    blocks: 0,
+                    atime: SystemTime::now(),
+                    mtime: SystemTime::now(),
+                    ctime: SystemTime::now(),
+                    crtime: SystemTime::now(),
+                    kind: fuser::FileType::Directory,
+                    perm: 0o755,
+                    nlink: 1,
+                    uid: 0,
+                    gid: 0,
+                    rdev: 0,
+                    flags: 0,
+                },
+                key: "".to_string(),
+                parent: 1,
+            },
+        );
+        ino_to_node.insert(
+            4,
+            model::fs::FSNode {
+                attr: FileAttr {
+                    ino: 4,
+                    size: 0,
+                    blksize: 0,
+                    blocks: 0,
+                    atime: SystemTime::now(),
+                    mtime: SystemTime::now(),
+                    ctime: SystemTime::now(),
+                    crtime: SystemTime::now(),
+                    kind: fuser::FileType::Directory,
+                    perm: 0o755,
+                    nlink: 1,
+                    uid: 0,
+                    gid: 0,
+                    rdev: 0,
+                    flags: 0,
+                },
+                key: "".to_string(),
+                parent: 2,
+            },
+        );
+
+        assert_eq!(fs.get_children(&ino_to_node, 1).len(), 2);
     }
 
     #[test]
@@ -390,7 +491,9 @@ mod tests {
         let client = adapters::mock::MockClient {};
         let fs = ObjectFS::new(Box::new(client), "dummy-bucket");
 
-        let root_attr = fs.get_root_attr();
+        let lock_ino_to_node = fs.ino_to_node.lock().unwrap();
+
+        let root_attr = fs.get_root_attr(&lock_ino_to_node);
 
         assert_eq!(root_attr.ino, 1, "expected root attr ino to be 1");
     }

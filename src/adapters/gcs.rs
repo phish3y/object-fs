@@ -92,49 +92,6 @@ impl adapters::adapter::ObjectAdapter for google_cloud_storage::client::Client {
         Ok(objects)
     }
 
-    fn fs_head_object(
-        &self,
-        bucket: &str,
-        key: &str,
-    ) -> Result<Option<model::fs::FSObject>, model::fs::FSError> {
-        let req = GetObjectRequest {
-            bucket: bucket.to_string(),
-            object: key.to_string(),
-            ..Default::default()
-        };
-
-        let o = match util::poll::poll_until_ready_error(self.get_object(&req)) {
-            Err(google_cloud_storage::http::Error::Response(err)) => {
-                if err.code == 404 {
-                    return Ok(None);
-                }
-
-                return Err(model::fs::FSError {
-                    message: format!("failed to get_object: {}, {}", key, err.to_string()),
-                });
-            }
-            Err(err) => {
-                return Err(model::fs::FSError {
-                    message: format!("failed to get_object: {}, {}", key, err.to_string()),
-                });
-            }
-            Ok(o) => o,
-        };
-
-        let modified_time = SystemTime::UNIX_EPOCH
-            + Duration::from_secs(
-                o.updated
-                    .unwrap_or(time::OffsetDateTime::now_utc())
-                    .unix_timestamp() as u64,
-            );
-
-        Ok(Some(model::fs::FSObject {
-            key: o.name,
-            size: o.size,
-            modified_time,
-        }))
-    }
-
     fn fs_download_object(
         &self,
         bucket: &str,

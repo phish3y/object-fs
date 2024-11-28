@@ -8,7 +8,8 @@ mod fuse;
 mod model;
 mod util;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let matches = Command::new("objectfs")
         .arg(Arg::new("MOUNT_POINT").required(true).index(1))
         .get_matches();

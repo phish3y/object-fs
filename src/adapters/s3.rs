@@ -76,47 +76,6 @@ impl adapters::adapter::ObjectAdapter for aws_sdk_s3::Client {
         Ok(objects)
     }
 
-    fn fs_head_object(
-        &self,
-        bucket: &str,
-        key: &str,
-    ) -> Result<Option<model::fs::FSObject>, model::fs::FSError> {
-        let req = self.head_object().bucket(bucket).key(key);
-
-        let ho = match util::poll::poll_until_ready_error(req.send()) {
-            Err(err) => {
-                if let Some(svc_err) = err.as_service_error() {
-                    if svc_err.is_not_found() {
-                        return Ok(None);
-                    }
-                }
-
-                return Err(model::fs::FSError {
-                    message: format!("failed to head_object: {}, {}", key, err.to_string()),
-                });
-            }
-            Ok(ho) => ho,
-        };
-
-        let secs = if ho.last_modified().is_some() {
-            ho.last_modified().unwrap().secs()
-        } else {
-            0
-        };
-        let nanos = if ho.last_modified().is_some() {
-            ho.last_modified().unwrap().subsec_nanos()
-        } else {
-            0
-        };
-        let modified_time = SystemTime::UNIX_EPOCH + Duration::new(secs as u64, nanos);
-
-        Ok(Some(model::fs::FSObject {
-            key: key.to_string(),
-            size: ho.content_length().unwrap_or(0),
-            modified_time,
-        }))
-    }
-
     fn fs_download_object(
         &self,
         bucket: &str,

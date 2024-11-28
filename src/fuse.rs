@@ -3,7 +3,9 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use fuser::{Filesystem, ReplyAttr, ReplyData, ReplyEntry, ReplyWrite, Request};
+use fuser::{
+    FileType, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, ReplyWrite, Request,
+};
 use libc::{EIO, ENOENT};
 
 use crate::{
@@ -21,6 +23,22 @@ impl Filesystem for ObjectFS {
         _config: &mut fuser::KernelConfig,
     ) -> Result<(), libc::c_int> {
         log::info!("`init` called");
+
+        let mut lock_key_to_node = match self.key_to_node.lock() {
+            Err(err) => {
+                log::error!("`init` failed to acquire `key_to_node` guard: {}", err);
+                return Err(-1);
+            }
+            Ok(guard) => guard,
+        };
+
+        let mut lock_ino_to_node = match self.ino_to_node.lock() {
+            Err(err) => {
+                log::error!("`init` failed to acquire `ino_to_node` guard: {}", err);
+                return Err(-1);
+            }
+            Ok(guard) => guard,
+        };
 
         let res = self.client.fs_put_object(&self.bucket, KEEP_FILE, None);
 
@@ -45,6 +63,7 @@ impl Filesystem for ObjectFS {
 
         for obj in objects {
             let key = if obj.key.ends_with('/') {
+                log::debug!("here0");
                 let key = format!("{}{}", obj.key, KEEP_FILE);
                 let res = self.client.fs_put_object(&self.bucket, &key, None);
 
@@ -61,11 +80,16 @@ impl Filesystem for ObjectFS {
                 obj.key
             };
 
-            self.index_object(&model::fs::FSObject {
-                key,
-                size: obj.size,
-                modified_time: obj.modified_time,
-            });
+            log::debug!("indexing object: {}", key);
+            self.index_object(
+                &mut lock_ino_to_node,
+                &mut lock_key_to_node,
+                &model::fs::FSObject {
+                    key,
+                    size: obj.size,
+                    modified_time: obj.modified_time,
+                },
+            );
         }
 
         return Ok(());
@@ -73,11 +97,6 @@ impl Filesystem for ObjectFS {
 
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
         log::debug!("`lookup` parent: {}, name: {:?}", parent, name);
-
-        if parent == self.get_root_attr().ino && name == "/" {
-            reply.entry(&TTL, &self.get_root_attr(), 0);
-            return;
-        }
 
         let lock_key_to_node = match self.key_to_node.lock() {
             Err(err) => {
@@ -96,6 +115,11 @@ impl Filesystem for ObjectFS {
             }
             Ok(guard) => guard,
         };
+
+        if parent == self.get_root_attr(&lock_ino_to_node).ino && name == "/" {
+            reply.entry(&TTL, &self.get_root_attr(&lock_ino_to_node), 0);
+            return;
+        }
 
         let parent_node = match lock_ino_to_node.get(&parent) {
             None => {
@@ -123,11 +147,6 @@ impl Filesystem for ObjectFS {
     fn getattr(&mut self, _req: &Request, ino: u64, fh: Option<u64>, reply: ReplyAttr) {
         log::debug!("`getattr` ino: {}, fh: {}", ino, fh.unwrap_or(0));
 
-        if ino == self.get_root_attr().ino {
-            reply.attr(&TTL, &self.get_root_attr());
-            return;
-        }
-
         let lock_ino_to_node = match self.ino_to_node.lock() {
             Err(err) => {
                 log::error!("`getattr` failed to acquire `ino_to_node` guard: {}", err);
@@ -137,13 +156,18 @@ impl Filesystem for ObjectFS {
             Ok(guard) => guard,
         };
 
+        if ino == self.get_root_attr(&lock_ino_to_node).ino {
+            reply.attr(&TTL, &self.get_root_attr(&lock_ino_to_node));
+            return;
+        }
+
         let node = match lock_ino_to_node.get(&ino) {
             None => {
                 log::error!("`getattr` failed to find ino: {}", ino);
                 reply.error(ENOENT);
                 return;
             }
-            Some(pn) => pn,
+            Some(n) => n,
         };
 
         reply.attr(&TTL, &node.attr);
@@ -170,6 +194,24 @@ impl Filesystem for ObjectFS {
             reply.error(libc::EOPNOTSUPP);
             return;
         }
+
+        let mut lock_key_to_node = match self.key_to_node.lock() {
+            Err(err) => {
+                log::error!("`mknod` failed to acquire `key_to_node` guard: {}", err);
+                reply.error(EIO);
+                return;
+            }
+            Ok(guard) => guard,
+        };
+
+        let mut lock_ino_to_node = match self.ino_to_node.lock() {
+            Err(err) => {
+                log::error!("`mknod` failed to acquire `ino_to_node` guard: {}", err);
+                reply.error(EIO);
+                return;
+            }
+            Ok(guard) => guard,
+        };
 
         let parent_node = {
             let lock_ino_to_node = match self.ino_to_node.lock() {
@@ -204,6 +246,8 @@ impl Filesystem for ObjectFS {
         }
 
         let new_node = self.index_file(
+            &mut lock_ino_to_node,
+            &mut lock_key_to_node,
             &FSObject {
                 key,
                 size: 0,
@@ -231,6 +275,24 @@ impl Filesystem for ObjectFS {
             mode,
             umask
         );
+
+        let mut lock_key_to_node = match self.key_to_node.lock() {
+            Err(err) => {
+                log::error!("`mkdir` failed to acquire `key_to_node` guard: {}", err);
+                reply.error(EIO);
+                return;
+            }
+            Ok(guard) => guard,
+        };
+
+        let mut lock_ino_to_node = match self.ino_to_node.lock() {
+            Err(err) => {
+                log::error!("`mkdir` failed to acquire `ino_to_node` guard: {}", err);
+                reply.error(EIO);
+                return;
+            }
+            Ok(guard) => guard,
+        };
 
         let parent_node = {
             let lock_ino_to_node = match self.ino_to_node.lock() {
@@ -270,6 +332,8 @@ impl Filesystem for ObjectFS {
         }
 
         let new_node = self.index_directory(
+            &mut lock_ino_to_node,
+            &mut lock_key_to_node,
             &FSObject {
                 key,
                 size: 0,
@@ -315,7 +379,7 @@ impl Filesystem for ObjectFS {
                 reply.error(ENOENT);
                 return;
             }
-            Some(pn) => pn,
+            Some(n) => n,
         };
 
         let maybe_bytes = match self.client.fs_download_object(
@@ -378,7 +442,7 @@ impl Filesystem for ObjectFS {
                 reply.error(ENOENT);
                 return;
             }
-            Some(pn) => pn,
+            Some(n) => n,
         };
 
         let maybe_bytes = match self
@@ -423,65 +487,48 @@ impl Filesystem for ObjectFS {
         reply.written(data.len() as u32);
     }
 
-    // fn readdir(
-    //     &mut self,
-    //     _req: &Request,
-    //     ino: u64,
-    //     fh: u64,
-    //     offset: i64,
-    //     mut reply: ReplyDirectory,
-    // ) {
-    //     log::debug!("`readdir` ino: {}, fh: {}, offset: {}", ino, fh, offset);
+    fn readdir(
+        &mut self,
+        _req: &Request,
+        ino: u64,
+        fh: u64,
+        offset: i64,
+        mut reply: ReplyDirectory,
+    ) {
+        log::debug!("`readdir` ino: {}, fh: {}, offset: {}", ino, fh, offset);
+        let lock_ino_to_node = match self.ino_to_node.lock() {
+            Err(err) => {
+                log::error!("`readdir` failed to acquire `ino_to_node` guard: {}", err);
+                reply.error(EIO);
+                return;
+            }
+            Ok(guard) => guard,
+        };
 
-    //     let mut lock_key_to_ino = self.key_to_ino
-    //         .lock()
-    //         .unwrap(); // TODO
+        let mut entries = vec![
+            (
+                self.get_root_attr(&lock_ino_to_node).ino,
+                FileType::Directory,
+                ".".to_string(),
+            ),
+            (
+                self.get_root_attr(&lock_ino_to_node).ino,
+                FileType::Directory,
+                "..".to_string(),
+            ),
+        ];
 
-    //     let mut lock_ino_to_key = self.ino_to_key
-    //         .lock()
-    //         .unwrap(); // TODO
+        for child in self.get_children(&lock_ino_to_node, ino) {
+            entries.push((child.attr.ino, child.attr.kind, child.key));
+        }
 
-    //     let prefix = lock_ino_to_key.get(&ino)
-    //         .unwrap(); // TODO
+        for (i, entry) in entries.into_iter().enumerate().skip(offset as usize) {
+            let next_offset = (i + 1) as i64;
+            if reply.add(entry.0, next_offset, entry.1, entry.2.clone()) {
+                break;
+            }
+        }
 
-    //     let lo_res = tokio::task::block_in_place(|| {
-    //         tokio::runtime::Handle::current().block_on(async {
-    //             self.client.list_objects_v2()
-    //                 .bucket(&self.bucket)
-    //                 .prefix(prefix)
-    //                 .send()
-    //                 .await
-    //                 .unwrap() // TODO
-    //         })
-    //     });
-
-    //     let mut entries = vec![
-    //         (ROOT_INO, FileType::Directory, ".".to_string()),
-    //         (ROOT_INO, FileType::Directory, "..".to_string()),
-    //     ];
-
-    //     for obj in lo_res.contents() {
-    //         let key = obj.key.clone()
-    //             .unwrap(); // TODO
-
-    //         if let Some(ino) = lock_key_to_ino.get(&key) { // TODO shadow
-    //             entries.push((*ino, FileType::RegularFile, key));
-    //         } else {
-    //             let next_ino = self.next_ino();
-    //             lock_ino_to_key.insert(next_ino, key.clone());
-    //             lock_key_to_ino.insert(key.clone(), next_ino);
-
-    //             entries.push((next_ino, FileType::RegularFile, key));
-    //         }
-    //     }
-
-    //     for (i, entry) in entries.into_iter().enumerate().skip(offset as usize) {
-    //         let next_offset = (i + 1) as i64;
-    //         if reply.add(entry.0, next_offset, entry.1, entry.2.clone()) {
-    //             break;
-    //         }
-    //     }
-
-    //     reply.ok();
-    // }
+        reply.ok();
+    }
 }
