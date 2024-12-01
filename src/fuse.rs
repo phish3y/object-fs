@@ -130,7 +130,11 @@ impl Filesystem for ObjectFS {
             Some(pn) => pn,
         };
 
-        let key = format!("{}/{}", parent_node.key, name.to_string_lossy());
+        let key = if parent_node.attr.ino == self.get_root_attr(&lock_ino_to_node).ino {
+            name.to_string_lossy().to_string()
+        } else {
+            format!("{}/{}", parent_node.key, name.to_string_lossy())
+        };
 
         let node = match lock_key_to_node.get(&key) {
             None => {
@@ -141,6 +145,12 @@ impl Filesystem for ObjectFS {
             Some(n) => n,
         };
 
+        log::debug!(
+            "`lookup` parent: {}, ino: {}, key: {}",
+            node.parent,
+            node.attr.ino,
+            node.key
+        );
         reply.entry(&TTL, &node.attr, 0);
     }
 
@@ -170,6 +180,12 @@ impl Filesystem for ObjectFS {
             Some(n) => n,
         };
 
+        log::debug!(
+            "`getattr` parent: {}, ino: {}, key: {}",
+            node.parent,
+            node.attr.ino,
+            node.key
+        );
         reply.attr(&TTL, &node.attr);
     }
 
@@ -213,28 +229,20 @@ impl Filesystem for ObjectFS {
             Ok(guard) => guard,
         };
 
-        let parent_node = {
-            let lock_ino_to_node = match self.ino_to_node.lock() {
-                Err(err) => {
-                    log::error!("`mknod` failed to acquire `ino_to_node` guard: {}", err);
-                    reply.error(EIO);
-                    return;
-                }
-                Ok(guard) => guard,
-            };
-
-            match lock_ino_to_node.get(&parent) {
-                None => {
-                    log::error!("`mknod`failed to find parent ino: {}", parent);
-                    reply.error(ENOENT);
-                    return;
-                }
-                Some(pn) => pn,
+        let parent_node = match lock_ino_to_node.get(&parent) {
+            None => {
+                log::error!("`mknod`failed to find parent ino: {}", parent);
+                reply.error(ENOENT);
+                return;
             }
-            .clone()
+            Some(pn) => pn,
         };
 
-        let key = format!("{}{}", parent_node.key, name.to_string_lossy());
+        let key = if parent_node.attr.ino == self.get_root_attr(&lock_ino_to_node).ino {
+            name.to_string_lossy().to_string()
+        } else {
+            format!("{}/{}", parent_node.key, name.to_string_lossy())
+        };
 
         match self.client.fs_put_object(&self.bucket, &key, None) {
             Err(err) => {
@@ -294,33 +302,25 @@ impl Filesystem for ObjectFS {
             Ok(guard) => guard,
         };
 
-        let parent_node = {
-            let lock_ino_to_node = match self.ino_to_node.lock() {
-                Err(err) => {
-                    log::error!("`mkdir` failed to acquire `ino_to_node` guard: {}", err);
-                    reply.error(EIO);
-                    return;
-                }
-                Ok(guard) => guard,
-            };
-
-            match lock_ino_to_node.get(&parent) {
-                None => {
-                    log::error!("`mkdir` failed to find parent ino: {}", parent);
-                    reply.error(ENOENT);
-                    return;
-                }
-                Some(pn) => pn,
+        let parent_node = match lock_ino_to_node.get(&parent) {
+            None => {
+                log::error!("`mkdir` failed to find parent ino: {}", parent);
+                reply.error(ENOENT);
+                return;
             }
-            .clone()
+            Some(pn) => pn,
         };
 
-        let key = format!(
-            "{}{}/{}",
-            parent_node.key,
-            name.to_string_lossy(),
-            KEEP_FILE
-        );
+        let key = if parent_node.attr.ino == self.get_root_attr(&lock_ino_to_node).ino {
+            format!("{}/{}", name.to_string_lossy(), KEEP_FILE)
+        } else {
+            format!(
+                "{}/{}/{}",
+                parent_node.key,
+                name.to_string_lossy(),
+                KEEP_FILE
+            )
+        };
 
         match self.client.fs_put_object(&self.bucket, &key, None) {
             Err(err) => {
@@ -427,7 +427,16 @@ impl Filesystem for ObjectFS {
             data.len()
         );
 
-        let lock_ino_to_node = match self.ino_to_node.lock() {
+        let mut lock_key_to_node = match self.key_to_node.lock() {
+            Err(err) => {
+                log::error!("`write` failed to acquire `key_to_node` guard: {}", err);
+                reply.error(EIO);
+                return;
+            }
+            Ok(guard) => guard,
+        };
+
+        let mut lock_ino_to_node = match self.ino_to_node.lock() {
             Err(err) => {
                 log::error!("`write` failed to acquire `ino_to_node` guard: {}", err);
                 reply.error(EIO);
@@ -436,7 +445,7 @@ impl Filesystem for ObjectFS {
             Ok(guard) => guard,
         };
 
-        let node = match lock_ino_to_node.get(&ino) {
+        let mut node = match lock_ino_to_node.remove(&ino) {
             None => {
                 log::error!("`write` failed to find ino: {}", ino);
                 reply.error(ENOENT);
@@ -483,6 +492,10 @@ impl Filesystem for ObjectFS {
             }
             Ok(_) => (),
         }
+
+        node.attr.size = data.len() as u64;
+        lock_ino_to_node.insert(node.attr.ino, node.clone());
+        lock_key_to_node.insert(node.key.clone(), node);
 
         reply.written(data.len() as u32);
     }
