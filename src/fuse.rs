@@ -8,29 +8,18 @@ use fuser::{
 };
 use libc::{EIO, ENOENT};
 
-use crate::{
-    fs::ObjectFS,
-    model::{self, fs::FSObject},
-};
+use crate::{fs, model};
 
 const TTL: Duration = Duration::new(0, 0);
 const KEEP_FILE: &str = ".keep";
 
-impl Filesystem for ObjectFS {
+impl Filesystem for fs::ObjectFS {
     fn init(
         &mut self,
         _req: &Request<'_>,
         _config: &mut fuser::KernelConfig,
     ) -> Result<(), libc::c_int> {
         log::info!("`init` called");
-
-        let mut lock_key_to_node = match self.key_to_node.lock() {
-            Err(err) => {
-                log::error!("`init` failed to acquire `key_to_node` guard: {}", err);
-                return Err(-1);
-            }
-            Ok(guard) => guard,
-        };
 
         let mut lock_ino_to_node = match self.ino_to_node.lock() {
             Err(err) => {
@@ -63,7 +52,6 @@ impl Filesystem for ObjectFS {
 
         for obj in objects {
             let key = if obj.key.ends_with('/') {
-                log::debug!("here0");
                 let key = format!("{}{}", obj.key, KEEP_FILE);
                 let res = self.client.fs_put_object(&self.bucket, &key, None);
 
@@ -80,10 +68,8 @@ impl Filesystem for ObjectFS {
                 obj.key
             };
 
-            log::debug!("indexing object: {}", key);
             self.index_object(
                 &mut lock_ino_to_node,
-                &mut lock_key_to_node,
                 &model::fs::FSObject {
                     key,
                     size: obj.size,
@@ -97,15 +83,6 @@ impl Filesystem for ObjectFS {
 
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
         log::debug!("`lookup` parent: {}, name: {:?}", parent, name);
-
-        let lock_key_to_node = match self.key_to_node.lock() {
-            Err(err) => {
-                log::error!("`lookup` failed to acquire `key_to_node` guard: {}", err);
-                reply.error(EIO);
-                return;
-            }
-            Ok(guard) => guard,
-        };
 
         let lock_ino_to_node = match self.ino_to_node.lock() {
             Err(err) => {
@@ -136,22 +113,18 @@ impl Filesystem for ObjectFS {
             format!("{}/{}", parent_node.key, name.to_string_lossy())
         };
 
-        let node = match lock_key_to_node.get(&key) {
-            None => {
-                log::warn!("`lookup` failed to find node: {}", key);
-                reply.error(ENOENT);
-                return;
+        let mut attr = None;
+        for child in self.get_children(&lock_ino_to_node, parent) {
+            if child.key == key {
+                attr = Some(child.attr);
             }
-            Some(n) => n,
-        };
+        }
 
-        log::debug!(
-            "`lookup` parent: {}, ino: {}, key: {}",
-            node.parent,
-            node.attr.ino,
-            node.key
-        );
-        reply.entry(&TTL, &node.attr, 0);
+        if let Some(a) = attr {
+            reply.entry(&TTL, &a, 0);
+        } else {
+            reply.error(ENOENT);
+        }
     }
 
     fn getattr(&mut self, _req: &Request, ino: u64, fh: Option<u64>, reply: ReplyAttr) {
@@ -211,15 +184,6 @@ impl Filesystem for ObjectFS {
             return;
         }
 
-        let mut lock_key_to_node = match self.key_to_node.lock() {
-            Err(err) => {
-                log::error!("`mknod` failed to acquire `key_to_node` guard: {}", err);
-                reply.error(EIO);
-                return;
-            }
-            Ok(guard) => guard,
-        };
-
         let mut lock_ino_to_node = match self.ino_to_node.lock() {
             Err(err) => {
                 log::error!("`mknod` failed to acquire `ino_to_node` guard: {}", err);
@@ -255,8 +219,7 @@ impl Filesystem for ObjectFS {
 
         let new_node = self.index_file(
             &mut lock_ino_to_node,
-            &mut lock_key_to_node,
-            &FSObject {
+            &model::fs::FSObject {
                 key,
                 size: 0,
                 modified_time: SystemTime::now(),
@@ -283,15 +246,6 @@ impl Filesystem for ObjectFS {
             mode,
             umask
         );
-
-        let mut lock_key_to_node = match self.key_to_node.lock() {
-            Err(err) => {
-                log::error!("`mkdir` failed to acquire `key_to_node` guard: {}", err);
-                reply.error(EIO);
-                return;
-            }
-            Ok(guard) => guard,
-        };
 
         let mut lock_ino_to_node = match self.ino_to_node.lock() {
             Err(err) => {
@@ -333,8 +287,7 @@ impl Filesystem for ObjectFS {
 
         let new_node = self.index_directory(
             &mut lock_ino_to_node,
-            &mut lock_key_to_node,
-            &FSObject {
+            &model::fs::FSObject {
                 key,
                 size: 0,
                 modified_time: SystemTime::now(),
@@ -427,15 +380,6 @@ impl Filesystem for ObjectFS {
             data.len()
         );
 
-        let mut lock_key_to_node = match self.key_to_node.lock() {
-            Err(err) => {
-                log::error!("`write` failed to acquire `key_to_node` guard: {}", err);
-                reply.error(EIO);
-                return;
-            }
-            Ok(guard) => guard,
-        };
-
         let mut lock_ino_to_node = match self.ino_to_node.lock() {
             Err(err) => {
                 log::error!("`write` failed to acquire `ino_to_node` guard: {}", err);
@@ -495,7 +439,6 @@ impl Filesystem for ObjectFS {
 
         node.attr.size = data.len() as u64;
         lock_ino_to_node.insert(node.attr.ino, node.clone());
-        lock_key_to_node.insert(node.key.clone(), node);
 
         reply.written(data.len() as u32);
     }
@@ -532,7 +475,7 @@ impl Filesystem for ObjectFS {
         ];
 
         for child in self.get_children(&lock_ino_to_node, ino) {
-            entries.push((child.attr.ino, child.attr.kind, child.key));
+            entries.push((child.attr.ino, child.attr.kind, child.name));
         }
 
         for (i, entry) in entries.into_iter().enumerate().skip(offset as usize) {

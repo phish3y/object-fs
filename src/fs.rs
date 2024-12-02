@@ -2,7 +2,10 @@ use std::{collections::HashMap, sync::Mutex, time::SystemTime};
 
 use fuser::FileAttr;
 
-use crate::{adapters, model};
+use crate::{
+    adapters,
+    model::{self, fs::FSNode},
+};
 
 pub const ROOT_INO: u64 = 1;
 
@@ -11,7 +14,6 @@ pub struct ObjectFS {
     pub bucket: String,
     pub current_ino: Mutex<u64>,
     pub ino_to_node: Mutex<HashMap<u64, model::fs::FSNode>>,
-    pub key_to_node: Mutex<HashMap<String, model::fs::FSNode>>,
 }
 
 impl ObjectFS {
@@ -36,6 +38,7 @@ impl ObjectFS {
                 flags: 0,
             },
             key: "".to_string(),
+            name: "".to_string(),
             parent: 0,
         };
 
@@ -49,7 +52,6 @@ impl ObjectFS {
             bucket: bucket.to_string(),
             current_ino: ROOT_INO.into(),
             ino_to_node: Mutex::new(ino_to_node),
-            key_to_node: Mutex::new(key_to_node),
         }
     }
 
@@ -66,7 +68,6 @@ impl ObjectFS {
     pub fn index_object(
         &self,
         ino_to_node: &mut HashMap<u64, model::fs::FSNode>,
-        key_to_node: &mut HashMap<String, model::fs::FSNode>,
         object: &model::fs::FSObject,
     ) {
         let mut components = Vec::new();
@@ -83,7 +84,6 @@ impl ObjectFS {
             parent_ino = if component == object.key {
                 self.index_file(
                     ino_to_node,
-                    key_to_node,
                     &model::fs::FSObject {
                         key: component,
                         size: object.size,
@@ -96,7 +96,6 @@ impl ObjectFS {
             } else {
                 self.index_directory(
                     ino_to_node,
-                    key_to_node,
                     &model::fs::FSObject {
                         key: component,
                         size: object.size,
@@ -113,12 +112,11 @@ impl ObjectFS {
     pub fn index_file(
         &self,
         ino_to_node: &mut HashMap<u64, model::fs::FSNode>,
-        key_to_node: &mut HashMap<String, model::fs::FSNode>,
         object: &model::fs::FSObject,
         parent: u64,
     ) -> model::fs::FSNode {
-        if key_to_node.get(&object.key).is_some() {
-            return key_to_node.get(&object.key).unwrap().clone();
+        if let Some(existing_node) = self.get_by_key(ino_to_node, &object.key) {
+            return existing_node;
         }
 
         let ino = self.next_ino();
@@ -141,11 +139,11 @@ impl ObjectFS {
                 flags: 0,
             },
             key: object.key.clone(),
+            name: self.get_name(&object.key),
             parent,
         };
 
         ino_to_node.insert(ino, node.clone());
-        key_to_node.insert(object.key.clone(), node.clone());
 
         return node;
     }
@@ -153,7 +151,6 @@ impl ObjectFS {
     pub fn index_directory(
         &self,
         ino_to_node: &mut HashMap<u64, model::fs::FSNode>,
-        key_to_node: &mut HashMap<String, model::fs::FSNode>,
         object: &model::fs::FSObject,
         parent: u64,
     ) -> model::fs::FSNode {
@@ -163,8 +160,8 @@ impl ObjectFS {
             &object.key
         };
 
-        if key_to_node.get(key).is_some() {
-            return key_to_node.get(key).unwrap().clone();
+        if let Some(existing_node) = self.get_by_key(ino_to_node, key) {
+            return existing_node;
         }
 
         let ino = self.next_ino();
@@ -186,12 +183,12 @@ impl ObjectFS {
                 rdev: 0,
                 flags: 0,
             },
-            key: object.key.clone(),
+            key: key.to_string(),
+            name: self.get_name(key),
             parent,
         };
 
         ino_to_node.insert(ino, node.clone());
-        key_to_node.insert(object.key.clone(), node.clone());
 
         return node;
     }
@@ -222,6 +219,24 @@ impl ObjectFS {
             Some(pos) if pos > 0 => Some(path[..pos].to_string()),
             _ => None,
         }
+    }
+
+    pub fn get_name(&self, path: &str) -> String {
+        path.rsplitn(2, '/').next().unwrap_or("").to_string()
+    }
+
+    pub fn get_by_key(
+        &self,
+        ino_to_node: &HashMap<u64, model::fs::FSNode>,
+        key: &str,
+    ) -> Option<FSNode> {
+        for node in ino_to_node.values() {
+            if node.key == key {
+                return Some(node.clone());
+            }
+        }
+
+        return None;
     }
 
     pub fn get_root_attr(&self, ino_to_node: &HashMap<u64, model::fs::FSNode>) -> FileAttr {
@@ -261,11 +276,9 @@ mod tests {
         ];
 
         let mut lock_ino_to_node = fs.ino_to_node.lock().unwrap();
-        let mut lock_key_to_node = fs.key_to_node.lock().unwrap();
         for (key, size, modified_time, expected_count) in cases {
             fs.index_object(
                 &mut lock_ino_to_node,
-                &mut lock_key_to_node,
                 &model::fs::FSObject {
                     key: key.to_string(),
                     size,
@@ -277,13 +290,6 @@ mod tests {
                 lock_ino_to_node.keys().len(),
                 expected_count,
                 "failed ino index count for case: {}",
-                key
-            );
-
-            assert_eq!(
-                lock_key_to_node.keys().len(),
-                expected_count,
-                "failed key index count for case: {}",
                 key
             );
         }
@@ -301,11 +307,9 @@ mod tests {
             let fs = ObjectFS::new(Box::new(adapters::mock::MockClient {}), "dummy-bucket");
 
             let mut lock_ino_to_node = fs.ino_to_node.lock().unwrap();
-            let mut lock_key_to_node = fs.key_to_node.lock().unwrap();
 
             let node = fs.index_file(
                 &mut lock_ino_to_node,
-                &mut lock_key_to_node,
                 &model::fs::FSObject {
                     key: key.to_string(),
                     size,
@@ -340,20 +344,23 @@ mod tests {
     #[test]
     fn test_index_directory() {
         let cases = vec![
-            ("folder", SystemTime::UNIX_EPOCH, 1),
-            ("folder/", SystemTime::now(), 5),
-            ("folder/subfolder/", SystemTime::UNIX_EPOCH, 7),
+            ("folder", "folder", SystemTime::UNIX_EPOCH, 1),
+            ("folder/", "folder", SystemTime::now(), 5),
+            (
+                "folder/subfolder/",
+                "folder/subfolder",
+                SystemTime::UNIX_EPOCH,
+                7,
+            ),
         ];
 
-        for (key, modified_time, parent) in cases {
+        for (key, expected_key, modified_time, parent) in cases {
             let fs = ObjectFS::new(Box::new(adapters::mock::MockClient {}), "dummy-bucket");
 
             let mut lock_ino_to_node = fs.ino_to_node.lock().unwrap();
-            let mut lock_key_to_node = fs.key_to_node.lock().unwrap();
 
             let node = fs.index_directory(
                 &mut lock_ino_to_node,
-                &mut lock_key_to_node,
                 &model::fs::FSObject {
                     key: key.to_string(),
                     size: 0,
@@ -371,7 +378,11 @@ mod tests {
                 "failed on `parent` for case: {}",
                 key
             );
-            assert_eq!(result.key, key, "failed on `key` for case: {}", key);
+            assert_eq!(
+                result.key, expected_key,
+                "failed on `key` for case: {}",
+                key
+            );
             assert_eq!(
                 result.attr.atime, modified_time,
                 "failed on `attr.atime` for case: {}",
@@ -410,6 +421,7 @@ mod tests {
                     flags: 0,
                 },
                 key: "".to_string(),
+                name: "".to_string(),
                 parent: 1,
             },
         );
@@ -434,6 +446,7 @@ mod tests {
                     flags: 0,
                 },
                 key: "".to_string(),
+                name: "".to_string(),
                 parent: 1,
             },
         );
@@ -458,6 +471,7 @@ mod tests {
                     flags: 0,
                 },
                 key: "".to_string(),
+                name: "".to_string(),
                 parent: 2,
             },
         );
@@ -483,6 +497,97 @@ mod tests {
         for (input, expected) in cases {
             let result = fs.get_parent(input);
             assert_eq!(result, expected, "failed for case: {}", input);
+        }
+    }
+
+    #[test]
+    fn test_get_name() {
+        let client = adapters::mock::MockClient {};
+        let fs = ObjectFS::new(Box::new(client), "dummy-bucket");
+
+        let cases = vec![
+            ("file1", "file1"),
+            ("folder1/file1", "file1"),
+            ("folder1/folder2/file1", "file1"),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(fs.get_name(input), expected, "failed for case: {}", input);
+        }
+    }
+
+    #[test]
+    fn test_key_exists() {
+        let client = adapters::mock::MockClient {};
+        let fs = ObjectFS::new(Box::new(client), "dummy-bucket");
+
+        let mut ino_to_node = fs.ino_to_node.lock().unwrap();
+        ino_to_node.insert(
+            2,
+            model::fs::FSNode {
+                attr: FileAttr {
+                    ino: 2,
+                    size: 0,
+                    blksize: 0,
+                    blocks: 0,
+                    atime: SystemTime::now(),
+                    mtime: SystemTime::now(),
+                    ctime: SystemTime::now(),
+                    crtime: SystemTime::now(),
+                    kind: fuser::FileType::Directory,
+                    perm: 0o755,
+                    nlink: 1,
+                    uid: 0,
+                    gid: 0,
+                    rdev: 0,
+                    flags: 0,
+                },
+                key: "file2".to_string(),
+                name: "file2".to_string(),
+                parent: 1,
+            },
+        );
+        ino_to_node.insert(
+            3,
+            model::fs::FSNode {
+                attr: FileAttr {
+                    ino: 3,
+                    size: 0,
+                    blksize: 0,
+                    blocks: 0,
+                    atime: SystemTime::now(),
+                    mtime: SystemTime::now(),
+                    ctime: SystemTime::now(),
+                    crtime: SystemTime::now(),
+                    kind: fuser::FileType::Directory,
+                    perm: 0o755,
+                    nlink: 1,
+                    uid: 0,
+                    gid: 0,
+                    rdev: 0,
+                    flags: 0,
+                },
+                key: "folder1/file1".to_string(),
+                name: "file1".to_string(),
+                parent: 1,
+            },
+        );
+
+        let cases = vec![
+            ("folder1/file1", Some(3)),
+            ("file2", Some(2)),
+            ("file3", None),
+        ];
+
+        for (input, expected) in cases {
+            let result = fs.get_by_key(&ino_to_node, input);
+            let result = if let Some(r) = result {
+                Some(r.attr.ino)
+            } else {
+                None
+            };
+
+            assert_eq!(result, expected, "failed to case: {}", input)
         }
     }
 

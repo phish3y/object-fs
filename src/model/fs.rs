@@ -2,6 +2,7 @@
 pub struct FSNode {
     pub attr: fuser::FileAttr,
     pub key: String,
+    pub name: String,
     pub parent: u64,
 }
 
