@@ -1755,7 +1755,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "object-fs"
+name = "objectfs"
 version = "0.1.0"
 dependencies = [
  "aws-config",
