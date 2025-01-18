@@ -20,7 +20,7 @@ impl Filesystem for fs::ObjectFS {
         _req: &Request<'_>,
         _config: &mut fuser::KernelConfig,
     ) -> Result<(), libc::c_int> {
-        let span = span!(Level::INFO, "init", context="init");
+        let span = span!(Level::INFO, "init", context = "init");
         let _e = span.enter();
         info!("called");
 
@@ -85,7 +85,7 @@ impl Filesystem for fs::ObjectFS {
     }
 
     fn destroy(&mut self) {
-        let span = span!(Level::INFO, "destroy", context="destroy");
+        let span = span!(Level::INFO, "destroy", context = "destroy");
         let _e = span.enter();
         info!("called");
 
@@ -96,12 +96,12 @@ impl Filesystem for fs::ObjectFS {
             }
             Ok(guard) => guard,
         };
-        
+
         lock_ino_to_node.clear();
     }
 
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        let span = span!(Level::INFO, "lookup", context="lookup");
+        let span = span!(Level::INFO, "lookup", context = "lookup");
         let _e = span.enter();
         info!(parent_ino=parent, filename=%name.to_string_lossy(), "called");
 
@@ -121,7 +121,11 @@ impl Filesystem for fs::ObjectFS {
 
         let parent_node = match lock_ino_to_node.get(&parent) {
             None => {
-                error!(error_message="failed to find parent ino", error_group="not_found", parent_ino=parent);
+                error!(
+                    error_message = "failed to find parent ino",
+                    error_group = "not_found",
+                    parent_ino = parent
+                );
                 reply.error(ENOENT);
                 return;
             }
@@ -147,18 +151,18 @@ impl Filesystem for fs::ObjectFS {
             reply.error(ENOENT);
         }
     }
-    
+
     fn forget(&mut self, _req: &Request<'_>, ino: u64, nlookup: u64) {
-        let span = span!(Level::INFO, "forget", context="forget");
+        let span = span!(Level::INFO, "forget", context = "forget");
         let _e = span.enter();
-        info!(ino=ino, nlookup=nlookup, "called");    
+        info!(ino = ino, nlookup = nlookup, "called");
         // Not implemented
     }
 
     fn getattr(&mut self, _req: &Request, ino: u64, fh: Option<u64>, reply: ReplyAttr) {
-        let span = span!(Level::INFO, "getattr", context="getattr");
+        let span = span!(Level::INFO, "getattr", context = "getattr");
         let _e = span.enter();
-        info!(ino=ino, fh=fh, "called");    
+        info!(ino = ino, fh = fh, "called");
 
         let lock_ino_to_node = match self.ino_to_node.lock() {
             Err(err) => {
@@ -176,7 +180,11 @@ impl Filesystem for fs::ObjectFS {
 
         let node = match lock_ino_to_node.get(&ino) {
             None => {
-                error!(error_message="failed to find ino", error_group="not_found", ino=ino);
+                error!(
+                    error_message = "failed to find ino",
+                    error_group = "not_found",
+                    ino = ino
+                );
                 reply.error(ENOENT);
                 return;
             }
@@ -196,9 +204,9 @@ impl Filesystem for fs::ObjectFS {
         _rdev: u32,
         reply: ReplyEntry,
     ) {
-        let span = span!(Level::INFO, "mknod", context="mknod");
+        let span = span!(Level::INFO, "mknod", context = "mknod");
         let _e = span.enter();
-        info!(parent_ino=parent, filename=%name.to_string_lossy(), mode=mode, "called");    
+        info!(parent_ino=parent, filename=%name.to_string_lossy(), mode=mode, "called");
 
         if (mode & libc::S_IFMT) != libc::S_IFREG {
             reply.error(libc::EOPNOTSUPP);
@@ -216,7 +224,11 @@ impl Filesystem for fs::ObjectFS {
 
         let parent_node = match lock_ino_to_node.get(&parent) {
             None => {
-                error!(error_message="failed to find parent ino", error_group="not_found", parent_ino=parent);
+                error!(
+                    error_message = "failed to find parent ino",
+                    error_group = "not_found",
+                    parent_ino = parent
+                );
                 reply.error(ENOENT);
                 return;
             }
@@ -260,9 +272,9 @@ impl Filesystem for fs::ObjectFS {
         umask: u32,
         reply: ReplyEntry,
     ) {
-        let span = span!(Level::INFO, "mkdir", context="mkdir");
+        let span = span!(Level::INFO, "mkdir", context = "mkdir");
         let _e = span.enter();
-        info!(parent_ino=parent, filename=%name.to_string_lossy(), mode=mode, umask=umask, "called");    
+        info!(parent_ino=parent, filename=%name.to_string_lossy(), mode=mode, umask=umask, "called");
 
         let mut lock_ino_to_node = match self.ino_to_node.lock() {
             Err(err) => {
@@ -275,7 +287,11 @@ impl Filesystem for fs::ObjectFS {
 
         let parent_node = match lock_ino_to_node.get(&parent) {
             None => {
-                error!(error_message="failed to find parent ino", error_group="not_found", parent_ino=parent);
+                error!(
+                    error_message = "failed to find parent ino",
+                    error_group = "not_found",
+                    parent_ino = parent
+                );
                 reply.error(ENOENT);
                 return;
             }
@@ -326,9 +342,9 @@ impl Filesystem for fs::ObjectFS {
         _lock_owner: Option<u64>,
         reply: ReplyData,
     ) {
-        let span = span!(Level::INFO, "read", context="read");
+        let span = span!(Level::INFO, "read", context = "read");
         let _e = span.enter();
-        info!(ino=ino, fh=fh, offset=offset, size=size, "called");  
+        info!(ino = ino, fh = fh, offset = offset, size = size, "called");
 
         let lock_ino_to_node = match self.ino_to_node.lock() {
             Err(err) => {
@@ -341,7 +357,11 @@ impl Filesystem for fs::ObjectFS {
 
         let node = match lock_ino_to_node.get(&ino) {
             None => {
-                error!(error_message="failed to find ino", error_group="not_found", ino=ino);
+                error!(
+                    error_message = "failed to find ino",
+                    error_group = "not_found",
+                    ino = ino
+                );
                 reply.error(ENOENT);
                 return;
             }
@@ -363,7 +383,11 @@ impl Filesystem for fs::ObjectFS {
 
         let bytes = match maybe_bytes {
             None => {
-                error!(error_message="failed to find object", error_group="not_found", key=node.key);
+                error!(
+                    error_message = "failed to find object",
+                    error_group = "not_found",
+                    key = node.key
+                );
                 reply.error(ENOENT);
                 return;
             }
@@ -385,9 +409,15 @@ impl Filesystem for fs::ObjectFS {
         _lock_owner: Option<u64>,
         reply: ReplyWrite,
     ) {
-        let span = span!(Level::INFO, "write", context="write");
+        let span = span!(Level::INFO, "write", context = "write");
         let _e = span.enter();
-        info!(ino=ino, fh=fh, offset=offset, size=data.len(), "called");  
+        info!(
+            ino = ino,
+            fh = fh,
+            offset = offset,
+            size = data.len(),
+            "called"
+        );
 
         let mut lock_ino_to_node = match self.ino_to_node.lock() {
             Err(err) => {
@@ -400,7 +430,11 @@ impl Filesystem for fs::ObjectFS {
 
         let mut node = match lock_ino_to_node.remove(&ino) {
             None => {
-                error!(error_message="failed to find ino", error_group="not_found", ino=ino);
+                error!(
+                    error_message = "failed to find ino",
+                    error_group = "not_found",
+                    ino = ino
+                );
                 reply.error(ENOENT);
                 return;
             }
@@ -421,7 +455,11 @@ impl Filesystem for fs::ObjectFS {
 
         let mut bytes = match maybe_bytes {
             None => {
-                error!(error_message="failed to find object", error_group="not_found", key=node.key);
+                error!(
+                    error_message = "failed to find object",
+                    error_group = "not_found",
+                    key = node.key
+                );
                 reply.error(ENOENT);
                 return;
             }
@@ -460,9 +498,9 @@ impl Filesystem for fs::ObjectFS {
         offset: i64,
         mut reply: ReplyDirectory,
     ) {
-        let span = span!(Level::INFO, "readdir", context="readdir");
+        let span = span!(Level::INFO, "readdir", context = "readdir");
         let _e = span.enter();
-        info!(ino=ino, fh=fh, offset=offset, "called");  
+        info!(ino = ino, fh = fh, offset = offset, "called");
 
         let lock_ino_to_node = match self.ino_to_node.lock() {
             Err(err) => {

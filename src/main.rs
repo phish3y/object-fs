@@ -10,7 +10,7 @@ mod util;
 async fn main() {
     tracing_subscriber::fmt().json().init();
 
-    let span = span!(Level::INFO, "main", context="main");
+    let span = span!(Level::INFO, "main", context = "main");
     let _e = span.enter();
     info!("called");
 
@@ -21,8 +21,8 @@ async fn main() {
 
     let bucket = matches.get_one::<String>("BUCKET").unwrap(); // TODO check if bucket exists
     let mountpoint = matches.get_one::<String>("MOUNT_POINT").unwrap();
-    info!(bucket=bucket, mountpoint=mountpoint, "args");
-    
+    info!(bucket = bucket, mountpoint = mountpoint, "args");
+
     let mut options = vec![fuser::MountOption::FSName("objectfs".to_string())];
     options.push(fuser::MountOption::AutoUnmount);
     options.push(fuser::MountOption::AllowRoot);
