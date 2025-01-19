@@ -37,8 +37,10 @@ jobs:
           mkdir -p dist
           tar -czvf dist/objectfs-v${{ env.version }}.tar.gz -C target/release objectfs
 
-      - name: publish
-        uses: actions/upload-artifact@v3
+      - name: publish-release
+        uses: actions/upload-release-asset@v1
         with:
-          name: objectfs-v${{ env.version }}
-          path: dist/objectfs-v${{ env.version }}.tar.gz
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: dist/objectfs-v${{ env.version }}.tar.gz
+          asset_name: objectfs-v${{ env.version }}.tar.gz
+          asset_content_type: application/gzip
