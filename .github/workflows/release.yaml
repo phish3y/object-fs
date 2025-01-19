@@ -1,4 +1,4 @@
-name: build-publish
+name: release
 on:
   push:
     branches:
@@ -114,19 +114,20 @@ jobs:
   
           cp extracted/objectfs deb-pkg/usr/local/bin/
           dpkg-deb --build deb-pkg dist/objectfs_${{ needs.build.outputs.version }}_amd64.deb
-      
-      - name: publish-package
-        uses: jrandiny/apt-repo-action@v2.0.1
-        with:
-          github_token: ${{ secrets.PAT }}
-          repo_supported_arch: |
-            amd64
-          repo_supported_version: |
-            jammy
-            noble
-          file: dist/objectfs_${{ needs.build.outputs.version }}_amd64.deb
-          file_target_version: noble
-          public_key: ${{ secrets.PUBLIC }}
-          private_key: ${{ secrets.PRIVATE }}
-          key_passphrase: ${{ secrets.SECRET }}
+            
+# TODO
+    #   - name: publish-package
+    #     uses: jrandiny/apt-repo-action@v2.0.1
+    #     with:
+    #       github_token: ${{ secrets.PAT }}
+    #       repo_supported_arch: |
+    #         amd64
+    #       repo_supported_version: |
+    #         jammy
+    #         noble
+    #       file: dist/objectfs_${{ needs.build.outputs.version }}_amd64.deb
+    #       file_target_version: noble
+    #       public_key: ${{ secrets.PUBLIC }}
+    #       private_key: ${{ secrets.PRIVATE }}
+    #       key_passphrase: ${{ secrets.SECRET }}
    
