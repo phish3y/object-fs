@@ -1,0 +1,39 @@
+name: CI
+on:
+  push:
+    branches:
+      - main
+permissions: 
+  contents: read
+  packages: write 
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v3
+
+      - name: install-rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+        
+      - name: extract-version
+        id: extract_version
+        run: |
+          version=$(grep '^version = ' Cargo.toml | head -1 | sed -E 's/version = "(.*)"/\1/')
+          echo "version=$version" >> $GITHUB_ENV
+
+      - name: build
+        run: cargo build --release
+    
+      - name: package
+        run: |
+          mkdir -p dist
+          tar -czvf dist/objectfs-v${{ env.version }}.tar.gz -C target/release objectfs
+
+      - name: publish
+        uses: actions/upload-artifact@v3
+        with:
+          name: objectfs-v${{ env.version }}
+          path: dist/objectfs-v${{ env.version }}.tar.gz
