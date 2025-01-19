@@ -71,7 +71,7 @@ jobs:
           draft: false
           prerelease: false
   
-      - name: upload-release
+      - name: publish-release
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -114,12 +114,19 @@ jobs:
   
           cp extracted/objectfs deb-pkg/usr/local/bin/
           dpkg-deb --build deb-pkg dist/objectfs_${{ needs.build.outputs.version }}_amd64.deb
-  
-      - name: upload-package
-        run: |
-          curl -u "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" \
-            -X POST \
-            -H "Content-Type: application/vnd.debian.binary-package" \
-            --data-binary @dist/objectfs_${{ needs.build.outputs.version }}_amd64.deb \
-            "https://uploads.github.com/repos/${{ github.repository }}/packages/releases/assets?name=objectfs_${{ needs.build.outputs.version }}_amd64.deb"
-  
+      
+      - name: publish-package
+        uses: jrandiny/apt-repo-action@v2.0.1
+        with:
+          github_token: ${{ secrets.PAT }}
+          repo_supported_arch: |
+            amd64
+          repo_supported_version: |
+            jammy
+            noble
+          file: dist/objectfs_${{ needs.build.outputs.version }}_amd64.deb
+          file_target_version: noble
+          public_key: ${{ secrets.PUBLIC }}
+          private_key: ${{ secrets.PRIVATE }}
+          key_passphrase: ${{ secrets.SECRET }}
+   
