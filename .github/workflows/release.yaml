@@ -24,7 +24,12 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
-        
+
+      - name: run-tests
+        run: |
+          cargo test --release
+        continue-on-error: false
+          
       - name: extract-version
         id: extract_version
         run: |
@@ -33,7 +38,7 @@ jobs:
 
       - name: build
         run: cargo build --release
-    
+
       - name: package
         run: |
           mkdir -p dist
@@ -95,6 +100,7 @@ jobs:
         run: |
           mkdir -p deb-pkg/DEBIAN
           mkdir -p deb-pkg/usr/local/bin
+          mkdir -p dist
   
           cat <<EOF > deb-pkg/DEBIAN/control
           Package: objectfs
