@@ -4,7 +4,7 @@ on:
     branches:
       - main
 permissions: 
-  contents: read
+  contents: write
   packages: write 
 jobs:
   build-publish:
@@ -37,10 +37,24 @@ jobs:
           mkdir -p dist
           tar -czvf dist/objectfs-v${{ env.version }}.tar.gz -C target/release objectfs
 
-      - name: publish-release
-        uses: actions/upload-release-asset@v1
+      - name: create-release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          upload_url: https://github.com/phish3y/object-fs/releases/download/objectfs-v${{ env.version }}.tar.gz
+          tag_name: "v${{ env.version }}"
+          release_name: "objectfs v${{ env.version }}"
+          body: "Release for objectfs v${{ env.version }}"
+          draft: false
+          prerelease: false
+  
+      - name: upload-release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: dist/objectfs-v${{ env.version }}.tar.gz
           asset_name: objectfs-v${{ env.version }}.tar.gz
           asset_content_type: application/gzip
