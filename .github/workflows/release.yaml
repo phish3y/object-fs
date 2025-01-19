@@ -40,7 +40,7 @@ jobs:
       - name: publish-release
         uses: actions/upload-release-asset@v1
         with:
-          upload_url: ${{ github.event.release.upload_url }}
+          upload_url: https://github.com/phish3y/object-fs/releases/download/objectfs-v${{ env.version }}.tar.gz
           asset_path: dist/objectfs-v${{ env.version }}.tar.gz
           asset_name: objectfs-v${{ env.version }}.tar.gz
           asset_content_type: application/gzip
