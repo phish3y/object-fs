@@ -4,7 +4,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    target-branch: dev
   - package-ecosystem: cargo
     directory: /
     schedule:
       interval: weekly
+    target-branch: dev
