@@ -15,6 +15,11 @@ jobs:
       - name: checkout
         uses: actions/checkout@v3
 
+      - name: install-deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libfuse3-dev
+
       - name: install-rust
         uses: actions-rs/toolchain@v1
         with:
