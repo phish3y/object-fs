@@ -65,9 +65,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: "v${{ needs.build.outputs.version }}_amd64"
-          release_name: "objectfs v${{ needs.build.outputs.version }}_amd64"
-          body: "Release for objectfs v${{ needs.build.outputs.version }}_amd64"
+          tag_name: "${{ needs.build.outputs.version }}_amd64"
+          release_name: "ObjectFS ${{ needs.build.outputs.version }} AMD64"
+          body: "Release for ObjectFS ${{ needs.build.outputs.version }} AMD64"
           draft: false
           prerelease: false
   
@@ -77,8 +77,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: objectfs-v${{ needs.build.outputs.version }}_amd64.tar.gz
-          asset_name: objectfs-v${{ needs.build.outputs.version }}_amd64.tar.gz
+          asset_path: objectfs-${{ needs.build.outputs.version }}_amd64.tar.gz
+          asset_name: ObjectFS ${{ needs.build.outputs.version }}
           asset_content_type: application/gzip
 
   publish-package:
@@ -90,7 +90,6 @@ jobs:
         with:
           name: objectfs-targz
 
-    
       - name: extract-artifact
         run: |
           mkdir -p extracted
