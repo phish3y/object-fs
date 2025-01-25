@@ -28,4 +28,8 @@ impl adapters::Object for MockClient {
     ) -> Result<Option<Vec<u8>>, model::fs::FSError> {
         Ok(Some(Vec::new()))
     }
+
+    fn fs_bucket_exists(&self, _bucket: &str) -> Result<bool, model::fs::FSError> {
+        Ok(true)
+    }
 }

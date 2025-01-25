@@ -1,10 +1,13 @@
 use std::time::{Duration, SystemTime};
 
-use google_cloud_storage::http::objects::{
-    download::Range,
-    get::GetObjectRequest,
-    list::ListObjectsRequest,
-    upload::{Media, UploadObjectRequest, UploadType},
+use google_cloud_storage::http::{
+    buckets::get::GetBucketRequest,
+    objects::{
+        download::Range,
+        get::GetObjectRequest,
+        list::ListObjectsRequest,
+        upload::{Media, UploadObjectRequest, UploadType},
+    },
 };
 
 use crate::{adapters, model, util};
@@ -129,5 +132,32 @@ impl adapters::Object for google_cloud_storage::client::Client {
         };
 
         Ok(Some(bytes))
+    }
+
+    fn fs_bucket_exists(&self, bucket: &str) -> Result<bool, model::fs::FSError> {
+        let req = GetBucketRequest {
+            bucket: bucket.to_string(),
+            if_metageneration_match: None,
+            if_metageneration_not_match: None,
+            projection: None,
+        };
+
+        match util::poll::poll_until_ready_error(self.get_bucket(&req)) {
+            Err(google_cloud_storage::http::Error::Response(err)) => {
+                if err.code == 404 {
+                    return Ok(false);
+                }
+
+                Err(model::fs::FSError {
+                    message: format!("failed to get_bucket: {}, {}", bucket, err.to_string()),
+                })
+            }
+            Err(err) => {
+                Err(model::fs::FSError {
+                    message: format!("failed to get_bucket: {}, {}", bucket, err.to_string()),
+                })
+            }
+            Ok(_) => Ok(true)
+        }
     }
 }

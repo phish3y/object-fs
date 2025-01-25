@@ -28,7 +28,10 @@ pub fn parse_provider_from_uri(bucket_uri: &str) -> Result<Provider, FSError> {
 }
 
 pub fn parse_bucket_from_uri(bucket_uri: &str) -> &str {
-    bucket_uri.split_once("://").map(|(_, rest)| rest).unwrap_or("")
+    bucket_uri
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or("")
 }
 
 #[cfg(test)]
@@ -37,8 +40,14 @@ mod tests {
 
     #[test]
     fn test_parse_provider() {
-        assert!(matches!(parse_provider_from_uri("s3://bucket"), Ok(Provider::AWS)));
-        assert!(matches!(parse_provider_from_uri("gs://bucket"), Ok(Provider::GCS)));
+        assert!(matches!(
+            parse_provider_from_uri("s3://bucket"),
+            Ok(Provider::AWS)
+        ));
+        assert!(matches!(
+            parse_provider_from_uri("gs://bucket"),
+            Ok(Provider::GCS)
+        ));
         assert!(matches!(parse_provider_from_uri("ftp://bucket"), Err(_)));
     }
 

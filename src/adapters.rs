@@ -1,8 +1,8 @@
+use crate::model;
+
 pub mod gcs;
 pub mod mock;
 pub mod s3;
-
-use crate::model;
 
 pub trait Object {
     fn fs_put_object(
@@ -24,4 +24,6 @@ pub trait Object {
         key: &str,
         range: Option<(u64, u64)>,
     ) -> Result<Option<Vec<u8>>, model::fs::FSError>;
+
+    fn fs_bucket_exists(&self, bucket: &str) -> Result<bool, model::fs::FSError>;
 }

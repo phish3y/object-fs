@@ -111,4 +111,21 @@ impl adapters::Object for aws_sdk_s3::Client {
 
         Ok(Some(bytes.into_bytes().to_vec()))
     }
+
+    fn fs_bucket_exists(&self, bucket: &str) -> Result<bool, model::fs::FSError> {
+        match util::poll::poll_until_ready_error(self.head_bucket().bucket(bucket).send()) {
+            Err(err) => {
+                if let Some(svc_err) = err.as_service_error() {
+                    if svc_err.is_not_found() {
+                        return Ok(false);
+                    }
+                }
+
+                Err(model::fs::FSError {
+                    message: format!("failed to head_bucket: {}, {}", bucket, err.to_string()),
+                })
+            }
+            Ok(_) => Ok(true),
+        }
+    }
 }
