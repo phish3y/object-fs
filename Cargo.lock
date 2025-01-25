@@ -609,9 +609,9 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
 name = "clap"
-version = "4.5.21"
+version = "4.5.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb3b4b9e5a7c7514dfa52869339ee98b3156b0bfb4e8a77c4ff4babb64b1604f"
+checksum = "a8eb5e908ef3a6efbe1ed62520fb7287959888c88485abe072543190ecc66783"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -619,9 +619,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.21"
+version = "4.5.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b17a95aa67cc7b5ebd32aa5370189aa0d79069ef1c64ce893bd30fb24bff20ec"
+checksum = "96b01801b5fc6a0a232407abc821660c9c6d25a1cafc0d4f85f29fb8d9afc121"
 dependencies = [
  "anstream",
  "anstyle",
@@ -631,9 +631,9 @@ dependencies = [
 
 [[package]]
 name = "clap_derive"
-version = "4.5.18"
+version = "4.5.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ac6a0c7b1a9e9a5186361f67dfa1b88213572f427fb9ab038efb2bd8c582dab"
+checksum = "54b755194d6389280185988721fffba69495eed5ee9feeee9a599b53db80318c"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -643,9 +643,9 @@ dependencies = [
 
 [[package]]
 name = "clap_lex"
-version = "0.7.3"
+version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "afb84c814227b90d6895e01398aee0d8033c00e7466aca416fb6a8e0eb19d8a7"
+checksum = "f46ad14479a25103f283c0f10005961cf086d8dc42205bb44c46ac563475dca6"
 
 [[package]]
 name = "colorchoice"
@@ -1094,9 +1094,9 @@ dependencies = [
 
 [[package]]
 name = "google-cloud-storage"
-version = "0.22.1"
+version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7347a3d65cd64db51e5b4aebf0c68c484042948c6d53f856f58269bc9816360"
+checksum = "e81dff54dbfa83705c896179ecaa4f384bfbfac90f3b637f38541443275b8a3f"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1756,7 +1756,7 @@ dependencies = [
 
 [[package]]
 name = "objectfs"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aws-config",
  "aws-sdk-s3",
@@ -2063,9 +2063,9 @@ dependencies = [
 
 [[package]]
 name = "reqwest-middleware"
-version = "0.3.3"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "562ceb5a604d3f7c885a792d42c199fd8af239d0a51b2fa6a78aafa092452b04"
+checksum = "d1ccd3b55e711f91a9885a2fa6fbbb2e39db1776420b062efc058c6410f7e5e3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2560,9 +2560,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.41.1"
+version = "1.43.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22cfb5bee7a6a52939ca9224d6ac897bb669134078daa8735560897f69de4d33"
+checksum = "3d61fa4ffa3de412bfea335c6ecff681de2b609ba3c77ef3e00e521813a9ed9e"
 dependencies = [
  "backtrace",
  "bytes",
@@ -2578,9 +2578,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-macros"
-version = "2.4.0"
+version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "693d596312e88961bc67d7f1f97af8a70227d9f90c31bba5806eec004978d752"
+checksum = "6e06d43f1345a3bcd39f6a56dbb7dcab2ba47e68e8ac134855e7e2bdbaf8cab8"
 dependencies = [
  "proc-macro2",
  "quote",

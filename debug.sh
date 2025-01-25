@@ -1,3 +1,3 @@
 #!/bin/bash
 
-RUST_LOG=debug cargo run -- fuse-tmp /tmp/objectfs
+RUST_LOG=debug cargo run -- s3://fuse-tmp /tmp/objectfs

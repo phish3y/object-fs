@@ -2,7 +2,7 @@ use crate::{adapters, model};
 
 pub struct MockClient {}
 
-impl adapters::adapter::ObjectAdapter for MockClient {
+impl adapters::Object for MockClient {
     fn fs_put_object(
         &self,
         _bucket: &str,
@@ -27,5 +27,9 @@ impl adapters::adapter::ObjectAdapter for MockClient {
         _range: Option<(u64, u64)>,
     ) -> Result<Option<Vec<u8>>, model::fs::FSError> {
         Ok(Some(Vec::new()))
+    }
+
+    fn fs_bucket_exists(&self, _bucket: &str) -> Result<bool, model::fs::FSError> {
+        Ok(true)
     }
 }
