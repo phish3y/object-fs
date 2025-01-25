@@ -152,12 +152,10 @@ impl adapters::Object for google_cloud_storage::client::Client {
                     message: format!("failed to get_bucket: {}, {}", bucket, err.to_string()),
                 })
             }
-            Err(err) => {
-                Err(model::fs::FSError {
-                    message: format!("failed to get_bucket: {}, {}", bucket, err.to_string()),
-                })
-            }
-            Ok(_) => Ok(true)
+            Err(err) => Err(model::fs::FSError {
+                message: format!("failed to get_bucket: {}, {}", bucket, err.to_string()),
+            }),
+            Ok(_) => Ok(true),
         }
     }
 }

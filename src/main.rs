@@ -6,6 +6,8 @@ mod fuse;
 mod model;
 mod util;
 
+const GAC: &str = "GOOGLE_APPLICATION_CREDENTIALS";
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt().json().init();
@@ -35,6 +37,15 @@ async fn main() {
         Box::new(aws_sdk_s3::Client::new(&config))
     } else {
         info!(client = "gcs");
+
+        match std::env::var(GAC) {
+            Err(_) => std::env::set_var(
+                GAC,
+                "$HOME/.config/gcloud/application_default_credentials.json",
+            ),
+            Ok(_) => (),
+        };
+
         let config = util::poll::poll_until_ready_error(
             google_cloud_storage::client::ClientConfig::default().with_auth(),
         )
