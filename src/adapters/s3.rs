@@ -4,7 +4,7 @@ use aws_sdk_s3::primitives::ByteStream;
 
 use crate::{adapters, model, util};
 
-impl adapters::adapter::ObjectAdapter for aws_sdk_s3::Client {
+impl adapters::Object for aws_sdk_s3::Client {
     fn fs_put_object(
         &self,
         bucket: &str,

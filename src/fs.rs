@@ -10,14 +10,14 @@ use crate::{
 pub const ROOT_INO: u64 = 1;
 
 pub struct ObjectFS {
-    pub client: Box<dyn adapters::adapter::ObjectAdapter>,
+    pub client: Box<dyn adapters::Object>,
     pub bucket: String,
     pub current_ino: Mutex<u64>,
     pub ino_to_node: Mutex<HashMap<u64, model::fs::FSNode>>,
 }
 
 impl ObjectFS {
-    pub fn new(client: Box<dyn adapters::adapter::ObjectAdapter>, bucket: &str) -> Self {
+    pub fn new(client: Box<dyn adapters::Object>, bucket: &str) -> Self {
         let mut ino_to_node = HashMap::new();
         let root_node = model::fs::FSNode {
             attr: FileAttr {

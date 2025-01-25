@@ -9,7 +9,7 @@ use google_cloud_storage::http::objects::{
 
 use crate::{adapters, model, util};
 
-impl adapters::adapter::ObjectAdapter for google_cloud_storage::client::Client {
+impl adapters::Object for google_cloud_storage::client::Client {
     fn fs_put_object(
         &self,
         bucket: &str,

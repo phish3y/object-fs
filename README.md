@@ -2,3 +2,16 @@
 
 
 FUSE filesystem abstraction over object storages: Amazon S3, Google Cloud Storage
+
+### usage
+##### AWS
+[![Setup AWS credentials](https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-configure.html)]
+```sh
+./objectfs s3://<bucket-name> <mount-point>
+```
+##### GCP
+[![Setup GCP credentials](https://cloud.google.com/sdk/docs/initializing)]
+
+```sh
+GOOGLE_APPLICATION_CREDENTIALS="$HOME/.config/gcloud/application_default_credentials.json" ./objectfs gs://<bucket-name> <mount-point>
+```

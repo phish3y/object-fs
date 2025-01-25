@@ -2,7 +2,7 @@ use crate::{adapters, model};
 
 pub struct MockClient {}
 
-impl adapters::adapter::ObjectAdapter for MockClient {
+impl adapters::Object for MockClient {
     fn fs_put_object(
         &self,
         _bucket: &str,
