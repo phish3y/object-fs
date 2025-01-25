@@ -48,7 +48,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: objectfs-targz
-          path: dist/objectfs-v${{ steps.extract_version.outputs.version }}_amd64.tar.gz
+          path: dist/objectfs-${{ steps.extract_version.outputs.version }}_amd64.tar.gz
 
   publish-release:
     runs-on: ubuntu-latest
