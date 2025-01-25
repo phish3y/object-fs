@@ -93,7 +93,7 @@ jobs:
       - name: extract-artifact
         run: |
           mkdir -p extracted
-          tar -xzvf objectfs-v${{ needs.build.outputs.version }}_amd64.tar.gz -C extracted
+          tar -xzvf objectfs-${{ needs.build.outputs.version }}_amd64.tar.gz -C extracted
   
       - name: create-package
         run: |
