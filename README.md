@@ -10,3 +10,6 @@ FUSE filesystem abstraction over object storages: Amazon S3, Google Cloud Storag
 ```sh
 ./objectfs s3://<bucket-name> <mount-point>
 ```
+```sh
+./objectfs gs://<bucket-name> <mount-point>
+```
