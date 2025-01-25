@@ -19,7 +19,7 @@ async fn main() {
         .arg(clap::Arg::new("MOUNT_POINT").required(true).index(2))
         .get_matches();
 
-    let bucket_uri = matches.get_one::<String>("BUCKET_URI").unwrap(); // TODO check if bucket exists
+    let bucket_uri = matches.get_one::<String>("BUCKET_URI").unwrap();
     let mountpoint = matches.get_one::<String>("MOUNT_POINT").unwrap();
     info!(bucket_uri = bucket_uri, mountpoint = mountpoint, "args");
 
@@ -47,7 +47,7 @@ async fn main() {
         panic!("bucket: {} does not exist", bucket);
     }
     info!(bucket = bucket);
-    
+
     let fs = fs::ObjectFS::new(client, bucket);
     fuser::mount2(fs, mountpoint, &options).unwrap();
 }
