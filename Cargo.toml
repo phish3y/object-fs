@@ -12,7 +12,7 @@ fuser = "0.15.1"
 futures = "0.3.31"
 google-cloud-storage = "0.24.0"
 libc = "0.2.169"
-time = "0.3.37"
+time = "0.3.41"
 tokio = { version = "1.43.0", features = ["full"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["json"] }
