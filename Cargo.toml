@@ -13,6 +13,6 @@ futures = "0.3.31"
 google-cloud-storage = "0.24.0"
 libc = "0.2.171"
 tokio = { version = "1.44.1", features = ["full"] }
-time = "0.3.41"
+time = "0.3.43"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["json"] }
